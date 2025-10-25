@@ -24,6 +24,10 @@ app.use((req, res, next) => {
 // Основные маршруты
 app.get('/', (req, res) => {
   const uptime = Math.floor((new Date() - stats.startTime) / 1000);
+  const hours = Math.floor(uptime / 3600);
+  const minutes = Math.floor((uptime % 3600) / 60);
+  const seconds = uptime % 60;
+  
   const html = `
     <!DOCTYPE html>
     <html>
@@ -218,7 +222,7 @@ app.get('/', (req, res) => {
                 <h3>📊 Статистика работы:</h3>
                 <pre>${JSON.stringify({
                   platform: stats.platform,
-                  uptime: ${Math.floor(uptime / 3600)}ч ${Math.floor((uptime % 3600) / 60)}м ${uptime % 60}с,
+                  uptime: `${hours}ч ${minutes}м ${seconds}с`,
                   total_requests: stats.requestCount,
                   start_time: stats.startTime.toLocaleString('ru-RU'),
                   current_time: new Date().toLocaleString('ru-RU'),
@@ -229,7 +233,7 @@ app.get('/', (req, res) => {
             
             <div class="info">
                 <div class="info-item">
-                    <div class="uptime">${Math.floor(uptime / 3600)}ч</div>
+                    <div class="uptime">${hours}ч</div>
                     <div>Время работы</div>
                 </div>
                 <div class="info-item">
