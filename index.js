@@ -332,7 +332,7 @@ var username = 'tochka_bi_laik';
 var password = 'JenyaKinel2023steam';
 var shared_secret = '';
 var games = [730]; // CS:GO
-var status = 1;
+var status = 7;
 
 var user = new steamUser();
 
