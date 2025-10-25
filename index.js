@@ -1,4 +1,7 @@
 const express = require('express');
+const steamUser = require('steam-user');
+const steamTotp = require('steam-totp');
+
 const app = express();
 const PORT = process.env.PORT || 10000;
 
@@ -180,23 +183,186 @@ app.get('/', (req, res) => {
                 color: #DA70D6;
                 text-decoration: none;
                 padding: 10px 20px;
-                border: 1px solid #
-const steamUser = require('steam-user');
-const steamTotp = require('steam-totp');
-const keep_alive = require('./keep_alive.js')
+                border: 1px solid #DA70D6;
+                border-radius: 25px;
+                transition: all 0.3s ease;
+                font-size: 0.9em;
+            }
+            .nav-link:hover {
+                background: rgba(218, 112, 214, 0.2);
+                transform: translateY(-2px);
+            }
+            .footer {
+                text-align: center;
+                margin-top: 30px;
+                color: #C9A0FF;
+                font-size: 0.8em;
+                position: relative;
+                z-index: 2;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>🎮 Steam Hour Booster</h1>
+                <p class="live">🟣 LIVE на Render.com | 24/7</p>
+            </div>
+            
+            <div class="status">
+                <h3>✨ Система активна и работает</h3>
+                <p>Надежный фиолетовый бустер для Steam</p>
+            </div>
+            
+            <div class="stats">
+                <h3>📊 Статистика работы:</h3>
+                <pre>${JSON.stringify({
+                  platform: stats.platform,
+                  uptime: ${Math.floor(uptime / 3600)}ч ${Math.floor((uptime % 3600) / 60)}м ${uptime % 60}с,
+                  total_requests: stats.requestCount,
+                  start_time: stats.startTime.toLocaleString('ru-RU'),
+                  current_time: new Date().toLocaleString('ru-RU'),
+                  status: stats.status,
+                  port: PORT
+                }, null, 2)}</pre>
+            </div>
+            
+            <div class="info">
+                <div class="info-item">
+                    <div class="uptime">${Math.floor(uptime / 3600)}ч</div>
+                    <div>Время работы</div>
+                </div>
+                <div class="info-item">
+                    <div class="uptime">${stats.requestCount}</div>
+                    <div>Запросов</div>
+                </div>
+                <div class="info-item">
+                    <div class="uptime">24/7</div>
+                    <div>Режим</div>
+                </div>
+                <div class="info-item">
+                    <div class="uptime">🟣</div>
+                    <div>Фиолетовый</div>
+                </div>
+            </div>
 
+            <div class="nav-links">
+                <a href="/health" class="nav-link">❤️ Health</a>
+                <a href="/ping" class="nav-link">🏓 Ping</a>
+                <a href="/status" class="nav-link">📈 Status</a>
+            </div>
+            
+            <div class="footer">
+                <p>🎯 Steam Hour Booster | ✨ Фиолетовая тема | 🚀 Render.com</p>
+            </div>
+        </div>
+
+        <script>
+            // Авто-обновление каждые 30 секунд
+            setTimeout(() => {
+                window.location.reload();
+            }, 30000);
+            
+            // Клиентский пинг каждые 25 секунд
+            setInterval(() => {
+                fetch('/ping').catch(e => console.log('Пинг...'));
+            }, 25000);
+
+            // Анимация появления элементов
+            document.addEventListener('DOMContentLoaded', () => {
+                const elements = document.querySelectorAll('.info-item, .status, .stats');
+                elements.forEach((el, index) => {
+                    setTimeout(() => {
+                        el.style.opacity = '0';
+                        el.style.transform = 'translateY(20px)';
+                        el.style.transition = 'all 0.6s ease';
+                        
+                        setTimeout(() => {
+                            el.style.opacity = '1';
+                            el.style.transform = 'translateY(0)';
+                        }, 50);
+                    }, index * 200);
+                });
+            });
+        </script>
+    </body>
+    </html>
+  `;
+  res.send(html);
+});
+
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: Math.floor((new Date() - stats.startTime) / 1000),
+    platform: 'Render.com',
+    message: '✅ Все системы работают нормально',
+    theme: 'purple'
+  });
+});
+
+app.get('/ping', (req, res) => {
+  res.json({ 
+    status: 'pong', 
+    timestamp: new Date().toISOString(),
+    server: 'render-steam-booster',
+    theme: '🟣 purple'
+  });
+});
+
+app.get('/status', (req, res) => {
+  res.json({
+    ...stats,
+    uptime: Math.floor((new Date() - stats.startTime) / 1000),
+    environment: process.env.NODE_ENV || 'production',
+    theme: {
+      name: 'purple',
+      colors: ['#8A2BE2', '#4B0082', '#9400D3', '#E0B0FF', '#DA70D6']
+    }
+  });
+});
+
+// Steam Bot логика
 var username = 'tochka_bi_laik';
 var password = 'JenyaKinel2023steam';
 var shared_secret = '';
-
-var games = [730];
+var games = [730]; // CS:GO
 var status = 1;
 
+var user = new steamUser();
 
-user = new steamUser();
-user.logOn({"accountName": username, "password": password});
+user.logOn({
+  "accountName": username,
+  "password": password
+});
+
 user.on('loggedOn', () => {
-    if (user.steamID != null) console.log(user.steamID + ' - Successfully logged on');
-    user.setPersona(status);               
-    user.gamesPlayed(games);
+  if (user.steamID != null) {
+    console.log('✅ Steam Bot успешно вошел: ' + user.steamID);
+    console.log('🎮 Запускаю игру: CS:GO');
+  }
+  user.setPersona(status);
+  user.gamesPlayed(games);
+});
+
+user.on('error', (err) => {
+  console.log('❌ Ошибка Steam Bot:', err);
+});
+
+// Запуск сервера
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Сервер запущен на порту ${PORT}`);
+  console.log(`🎨 Тема: Фиолетовая`);
+  console.log(`⏰ Время запуска: ${new Date().toLocaleString('ru-RU')}`);
+  console.log(`🎮 Steam Bot запускается...`);
+});
+
+// Обработка ошибок
+process.on('uncaughtException', (error) => {
+  console.error('💥 Непредвиденная ошибка:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('⚠️ Необработанный промис:', reason);
 });
