@@ -2,376 +2,319 @@ const express = require('express');
 const steamUser = require('steam-user');
 const steamTotp = require('steam-totp');
 const fetch = require('node-fetch');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const sqlite3 = require('sqlite3').verbose();
+
 const app = express();
 const PORT = process.env.PORT || 10000;
+const JWT_SECRET = process.env.JWT_SECRET || 'kinel-secret-key-2024';
+
+// Инициализация БД
+const db = new sqlite3.Database(':memory:');
+
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE,
+        password TEXT,
+        is_admin BOOLEAN DEFAULT FALSE,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS steam_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        name TEXT,
+        username TEXT,
+        password TEXT,
+        games TEXT,
+        status INTEGER DEFAULT 1,
+        stealth_mode BOOLEAN DEFAULT FALSE,
+        farm_days INTEGER DEFAULT 0,
+        farm_start_date DATETIME,
+        total_hours REAL DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+    )`);
+
+    // Создаем админ аккаунт
+    const adminPassword = bcrypt.hashSync('JenyaKinel', 10);
+    db.run(`INSERT OR IGNORE INTO users (username, password, is_admin) VALUES (?, ?, ?)`, 
+        ['kinel', adminPassword, true], function(err) {
+        if (!err && this.changes > 0) {
+            // Создаем привязанный Steam аккаунт для kinel
+            const adminId = this.lastID;
+            db.run(`INSERT INTO steam_accounts 
+                    (user_id, name, username, password, games, stealth_mode) 
+                    VALUES (?, ?, ?, ?, ?, ?)`,
+                [adminId, 'Точка', 'tochka_bi_laik', 'JenyaKinel2023steam', '730', false]
+            );
+        }
+    });
+});
 
 // Конфигурация
 const CONFIG = {
-    STEAM_ID: '76561198779509609',
-    PROFILE_NAME: 'точка',
     UPDATE_INTERVAL: 60000,
-    
-    // Данные для Steam Bot (фарм часов)
-    BOT_USERNAME: 'tochka_bi_laik',
-    BOT_PASSWORD: 'JenyaKinel2023steam',
-    SHARED_SECRET: '',
-    GAMES: [730], // CS2
-    STATUS: 7
+    MAX_GAMES: 32
 };
 
-// Состояние
-const state = {
-    cs2Hours: '2,154.3',
-    lastUpdate: null,
-    isLoading: true,
-    error: null,
-    botStatus: 'offline',
-    farmStatus: 'stopped'
-};
+// Состояние приложения
+const farmingBots = new Map();
 
 // Steam Bot для фарма часов
 class SteamFarmBot {
-    constructor() {
+    constructor(account, user) {
+        this.account = account;
+        this.user = user;
         this.client = new steamUser();
         this.isRunning = false;
+        this.startTime = null;
         this.setupEventHandlers();
     }
 
     setupEventHandlers() {
         this.client.on('loggedOn', () => {
-            console.log('✅ Steam Bot успешно вошел в систему');
-            state.botStatus = 'online';
+            console.log(`✅ Steam Bot ${this.account.name} успешно вошел в систему`);
             
-            // Устанавливаем статус и запускаем игру
-            this.client.setPersona(CONFIG.STATUS);
-            this.client.gamesPlayed(CONFIG.GAMES);
+            const status = this.account.stealth_mode ? 7 : 1;
+            this.client.setPersona(status);
             
-            console.log('🎮 Запускаю фарм часов в CS2...');
-            state.farmStatus = 'running';
+            const games = this.account.games.split(',').map(id => parseInt(id.trim()));
+            this.client.gamesPlayed(games);
+            
             this.isRunning = true;
+            this.startTime = new Date();
+            
+            db.run(`UPDATE steam_accounts SET farm_start_date = ? WHERE id = ?`, 
+                [this.startTime, this.account.id]);
         });
 
         this.client.on('error', (err) => {
-            console.log('❌ Ошибка Steam Bot:', err);
-            state.botStatus = 'error';
-            state.farmStatus = 'stopped';
+            console.log(`❌ Ошибка Steam Bot ${this.account.name}:`, err);
             this.isRunning = false;
         });
 
         this.client.on('disconnected', () => {
-            console.log('🔌 Steam Bot отключен');
-            state.botStatus = 'offline';
-            state.farmStatus = 'stopped';
+            console.log(`🔌 Steam Bot ${this.account.name} отключен`);
             this.isRunning = false;
         });
     }
 
     startFarming() {
-        if (this.isRunning) {
-            console.log('⚠️ Фарм уже запущен');
-            return;
-        }
+        if (this.isRunning) return;
 
-        console.log('🚀 Запуск Steam Bot для фарма часов...');
+        console.log(`🚀 Запуск Steam Bot ${this.account.name}...`);
         
         const logOnOptions = {
-            accountName: CONFIG.BOT_USERNAME,
-            password: CONFIG.BOT_PASSWORD
+            accountName: this.account.username,
+            password: this.account.password
         };
-
-        // Если есть shared_secret, добавляем two-factor
-        if (CONFIG.SHARED_SECRET) {
-            logOnOptions.twoFactorCode = steamTotp.generateAuthCode(CONFIG.SHARED_SECRET);
-        }
 
         this.client.logOn(logOnOptions);
     }
 
     stopFarming() {
         if (this.isRunning) {
-            console.log('🛑 Останавливаю фарм часов...');
+            console.log(`🛑 Останавливаю фарм ${this.account.name}...`);
             this.client.logOff();
             this.isRunning = false;
-            state.botStatus = 'offline';
-            state.farmStatus = 'stopped';
         }
     }
 
     getStatus() {
         return {
             isRunning: this.isRunning,
-            botStatus: state.botStatus,
-            farmStatus: state.farmStatus
+            startTime: this.startTime,
+            account: this.account
         };
     }
 }
 
-// Инициализация бота
-const farmBot = new SteamFarmBot();
-
-// Класс для работы с Steam API (получение данных)
-class SteamDataFetcher {
-    static async fetchCS2Hours(steamId) {
-        const methods = [
-            this.methodSteamCommunityXML,
-            this.methodSteamWebAPI, 
-            this.methodSteamSpy,
-            this.methodDirectScraping,
-            this.methodBackupData
-        ];
-
-        for (let i = 0; i < methods.length; i++) {
-            try {
-                console.log(`🔄 Попытка метода ${i + 1}...`);
-                const hours = await methods[i](steamId);
-                if (hours && hours !== '—') {
-                    console.log(`✅ Метод ${i + 1} успешен: ${hours} часов`);
-                    return hours;
-                }
-            } catch (error) {
-                console.log(`❌ Метод ${i + 1} failed:`, error.message);
-            }
-            
-            if (i < methods.length - 1) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-        }
-        
-        return '—';
-    }
-
-    static async methodSteamCommunityXML(steamId) {
-        try {
-            const response = await fetch(`https://steamcommunity.com/profiles/${steamId}/games/?xml=1`, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': 'application/xml, text/xml, */*'
-                },
-                timeout: 10000
-            });
-
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-            const text = await response.text();
-            const cs2Regex = /<game>[\s\S]*?<appID>730<\/appID>[\s\S]*?<hoursOnRecord>([^<]+)<\/hoursOnRecord>/;
-            const match = text.match(cs2Regex);
-            
-            if (match && match[1]) {
-                return parseFloat(match[1]).toFixed(1);
-            }
-        } catch (error) {
-            throw new Error(`XML API: ${error.message}`);
-        }
-        return null;
-    }
-
-    static async methodSteamWebAPI(steamId) {
-        try {
-            const endpoints = [
-                `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?steamid=${steamId}&include_played_free_games=1&format=json`,
-                `https://api.steampowered.com/ISteamUserStats/GetUserStatsForGame/v2/?appid=730&steamid=${steamId}`
-            ];
-
-            for (const endpoint of endpoints) {
-                try {
-                    const response = await fetch(endpoint, {
-                        headers: {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                        },
-                        timeout: 8000
-                    });
-
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.response && data.response.games) {
-                            const cs2Game = data.response.games.find(game => game.appid === 730);
-                            if (cs2Game && cs2Game.playtime_forever) {
-                                return (cs2Game.playtime_forever / 60).toFixed(1);
-                            }
-                        }
-                    }
-                } catch (e) {
-                    continue;
-                }
-            }
-        } catch (error) {
-            throw new Error(`Web API: ${error.message}`);
-        }
-        return null;
-    }
-
-    static async methodSteamSpy(steamId) {
-        try {
-            const response = await fetch(`https://steamspy.com/api.php?request=user&id=${steamId}`, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                },
-                timeout: 8000
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                if (data['730'] && data['730'].total_playtime) {
-                    return (data['730'].total_playtime / 60).toFixed(1);
-                }
-            }
-        } catch (error) {
-            throw new Error(`SteamSpy: ${error.message}`);
-        }
-        return null;
-    }
-
-    static async methodDirectScraping(steamId) {
-        try {
-            const response = await fetch(`https://steamcommunity.com/profiles/${steamId}/games/?tab=all`, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Cache-Control': 'no-cache'
-                },
-                timeout: 15000
-            });
-
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const html = await response.text();
-
-            const jsonRegex = /var rgGames = (\[.*?\]);/;
-            const jsonMatch = html.match(jsonRegex);
-            
-            if (jsonMatch) {
-                try {
-                    const gamesData = JSON.parse(jsonMatch[1]);
-                    const cs2Game = gamesData.find(game => game.appid === 730);
-                    
-                    if (cs2Game) {
-                        if (cs2Game.hours_forever) {
-                            return parseFloat(cs2Game.hours_forever).toFixed(1);
-                        } else if (cs2Game.playtime_forever) {
-                            return (cs2Game.playtime_forever / 60).toFixed(1);
-                        }
-                    }
-                } catch (e) {
-                    console.log('JSON parse error:', e.message);
-                }
-            }
-
-            const regexPatterns = [
-                /"appid":730[^}]*"playtime_forever":(\d+)/,
-                /Counter-Strike 2[^>]*>([\d,\.]+)\s*hrs/,
-                /"730"[^}]*"hours_forever":"([^"]+)"/
-            ];
-
-            for (const pattern of regexPatterns) {
-                const match = html.match(pattern);
-                if (match && match[1]) {
-                    const hours = parseFloat(match[1].replace(',', ''));
-                    if (!isNaN(hours)) {
-                        return hours.toFixed(1);
-                    }
-                }
-            }
-
-        } catch (error) {
-            throw new Error(`Scraping: ${error.message}`);
-        }
-        return null;
-    }
-
-    static async methodBackupData(steamId) {
-        // Увеличиваем часы на основе статуса фарма
-        let baseHours = 2154.3;
-        if (state.farmStatus === 'running') {
-            baseHours += 0.1; // Симуляция увеличения часов
-        }
-        return baseHours.toFixed(1);
-    }
-}
-
-// Обновление данных
-async function updateCS2Hours() {
-    try {
-        state.isLoading = true;
-        state.error = null;
-        
-        console.log('🔄 Запуск обновления данных CS2...');
-        const hours = await SteamDataFetcher.fetchCS2Hours(CONFIG.STEAM_ID);
-        
-        state.cs2Hours = hours;
-        state.lastUpdate = new Date();
-        state.isLoading = false;
-        
-        console.log(`✅ Данные обновлены: ${hours} часов`);
-        
-    } catch (error) {
-        state.error = error.message;
-        state.isLoading = false;
-        console.log(`❌ Ошибка обновления: ${error.message}`);
-    }
-}
-
-// Express сервер
+// Middleware
 app.use(express.json());
+app.use(express.static('public'));
 
+// Auth middleware
+function authMiddleware(req, res, next) {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'Требуется авторизация' });
+
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.user = decoded;
+        next();
+    } catch (error) {
+        res.status(401).json({ error: 'Неверный токен' });
+    }
+}
+
+// Admin middleware
+function adminMiddleware(req, res, next) {
+    if (!req.user.is_admin) {
+        return res.status(403).json({ error: 'Требуются права администратора' });
+    }
+    next();
+}
+
+// Routes
+app.post('/api/register', async (req, res) => {
+    const { username, password } = req.body;
+
+    try {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        db.run(`INSERT INTO users (username, password) VALUES (?, ?)`, 
+            [username, hashedPassword], function(err) {
+            if (err) {
+                return res.status(400).json({ error: 'Пользователь уже существует' });
+            }
+            res.json({ success: true, message: 'Аккаунт создан' });
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Ошибка сервера' });
+    }
+});
+
+app.post('/api/login', async (req, res) => {
+    const { username, password } = req.body;
+
+    db.get(`SELECT * FROM users WHERE username = ?`, [username], async (err, user) => {
+        if (err || !user) {
+            return res.status(400).json({ error: 'Неверный логин или пароль' });
+        }
+
+        const validPassword = await bcrypt.compare(password, user.password);
+        if (!validPassword) {
+            return res.status(400).json({ error: 'Неверный логин или пароль' });
+        }
+
+        const token = jwt.sign(
+            { id: user.id, username: user.username, is_admin: user.is_admin }, 
+            JWT_SECRET, 
+            { expiresIn: '30d' }
+        );
+
+        res.json({ 
+            success: true, 
+            token, 
+            user: { 
+                username: user.username, 
+                is_admin: user.is_admin 
+            } 
+        });
+    });
+});
+
+// Steam accounts management
+app.get('/api/accounts', authMiddleware, (req, res) => {
+    db.all(`SELECT * FROM steam_accounts WHERE user_id = ?`, [req.user.id], (err, accounts) => {
+        if (err) return res.status(500).json({ error: 'Ошибка БД' });
+        
+        const accountsWithStatus = accounts.map(account => {
+            const bot = farmingBots.get(account.id);
+            return {
+                ...account,
+                isFarming: bot ? bot.isRunning : false,
+                farmingTime: bot && bot.startTime ? 
+                    Math.floor((new Date() - bot.startTime) / 1000 / 60) : 0
+            };
+        });
+        
+        res.json({ accounts: accountsWithStatus });
+    });
+});
+
+app.post('/api/accounts', authMiddleware, (req, res) => {
+    const { name, username, password, games, stealth_mode, farm_days } = req.body;
+
+    db.get(`SELECT COUNT(*) as count FROM steam_accounts WHERE user_id = ?`, [req.user.id], (err, result) => {
+        if (err) return res.status(500).json({ error: 'Ошибка БД' });
+        
+        if (result.count >= 5) {
+            return res.status(400).json({ error: 'Максимум 5 аккаунтов' });
+        }
+
+        const gamesArray = games.split(',').map(g => g.trim());
+        if (gamesArray.length > CONFIG.MAX_GAMES) {
+            return res.status(400).json({ error: `Максимум ${CONFIG.MAX_GAMES} игр` });
+        }
+
+        db.run(`INSERT INTO steam_accounts 
+                (user_id, name, username, password, games, stealth_mode, farm_days) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [req.user.id, name, username, password, games, stealth_mode, farm_days],
+            function(err) {
+                if (err) return res.status(500).json({ error: 'Ошибка создания аккаунта' });
+                
+                res.json({ 
+                    success: true, 
+                    message: 'Аккаунт создан',
+                    accountId: this.lastID 
+                });
+            }
+        );
+    });
+});
+
+// Farm management
+app.post('/api/farm/start/:accountId', authMiddleware, (req, res) => {
+    const accountId = req.params.accountId;
+
+    db.get(`SELECT * FROM steam_accounts WHERE id = ? AND user_id = ?`, 
+        [accountId, req.user.id], (err, account) => {
+        if (err || !account) {
+            return res.status(404).json({ error: 'Аккаунт не найден' });
+        }
+
+        let bot = farmingBots.get(accountId);
+        if (!bot) {
+            bot = new SteamFarmBot(account, req.user);
+            farmingBots.set(accountId, bot);
+        }
+
+        bot.startFarming();
+        res.json({ success: true, message: 'Фарм запущен' });
+    });
+});
+
+app.post('/api/farm/stop/:accountId', authMiddleware, (req, res) => {
+    const accountId = req.params.accountId;
+    const bot = farmingBots.get(accountId);
+
+    if (bot) {
+        bot.stopFarming();
+        res.json({ success: true, message: 'Фарм остановлен' });
+    } else {
+        res.status(404).json({ error: 'Бот не найден' });
+    }
+});
+
+// Admin routes
+app.get('/api/admin/stats', authMiddleware, adminMiddleware, (req, res) => {
+    db.all(`SELECT * FROM users`, (err, users) => {
+        if (err) return res.status(500).json({ error: 'Ошибка БД' });
+        
+        const stats = {
+            totalUsers: users.length,
+            totalAccounts: 0,
+            activeFarms: Array.from(farmingBots.values()).filter(bot => bot.isRunning).length,
+            users: users
+        };
+        
+        res.json(stats);
+    });
+});
+
+// HTML Routes with Liquid Glass design
 app.get('/', (req, res) => {
-    const html = generateMinimalHTML();
-    res.send(html);
-});
-
-app.get('/api/cs2-hours', async (req, res) => {
-    await updateCS2Hours();
-    res.json({
-        hours: state.cs2Hours,
-        lastUpdate: state.lastUpdate,
-        isLoading: state.isLoading,
-        error: state.error,
-        farmStatus: state.farmStatus,
-        botStatus: state.botStatus
-    });
-});
-
-// API для управления фармом
-app.post('/api/farm/start', (req, res) => {
-    farmBot.startFarming();
-    res.json({
-        success: true,
-        message: 'Фарм часов запущен',
-        status: state.farmStatus
-    });
-});
-
-app.post('/api/farm/stop', (req, res) => {
-    farmBot.stopFarming();
-    res.json({
-        success: true,
-        message: 'Фарм часов остановлен',
-        status: state.farmStatus
-    });
-});
-
-app.get('/api/farm/status', (req, res) => {
-    res.json(farmBot.getStatus());
-});
-
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'healthy',
-        steamId: CONFIG.STEAM_ID,
-        farmStatus: state.farmStatus,
-        botStatus: state.botStatus,
-        lastUpdate: state.lastUpdate,
-        uptime: process.uptime()
-    });
-});
-
-// Генерация HTML
-function generateMinimalHTML() {
-    return `
+    res.send(`
     <!DOCTYPE html>
     <html lang="ru">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>CS2 Hours • точка • Фарм</title>
+        <title>Steam Farm • Бесплатный фарм часов</title>
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         <style>
@@ -390,9 +333,9 @@ function generateMinimalHTML() {
                 --text: #E2E8F0;
                 --text-secondary: #94A3B8;
                 --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
-                --success: #10B981;
-                --warning: #F59E0B;
-                --error: #EF4444;
+                --glass: rgba(255, 255, 255, 0.1);
+                --glass-border: rgba(255, 255, 255, 0.2);
+                --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
             }
             
             body {
@@ -403,34 +346,46 @@ function generateMinimalHTML() {
                 overflow-x: hidden;
             }
             
-            .parallax-bg {
+            .liquid-glass-effect {
                 position: fixed;
                 top: 0;
                 left: 0;
                 width: 100%;
                 height: 100%;
-                z-index: -2;
                 background: 
-                    radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.1) 0%, transparent 50%),
-                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.1) 0%, transparent 50%);
+                    radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
+                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.15) 0%, transparent 50%);
+                backdrop-filter: blur(40px);
+                -webkit-backdrop-filter: blur(40px);
+                z-index: -2;
             }
             
-            .particles {
+            .header {
                 position: fixed;
                 top: 0;
-                left: 0;
                 width: 100%;
-                height: 100%;
-                z-index: -1;
-                opacity: 0.6;
+                padding: 20px;
+                display: flex;
+                justify-content: flex-end;
+                z-index: 1000;
             }
             
-            .particle {
-                position: absolute;
-                background: var(--primary);
-                border-radius: 50%;
-                opacity: 0.3;
-                animation: float 6s ease-in-out infinite;
+            .login-btn {
+                background: var(--gradient);
+                border: none;
+                padding: 12px 24px;
+                border-radius: 12px;
+                color: white;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                backdrop-filter: blur(10px);
+                border: 1px solid var(--glass-border);
+            }
+            
+            .login-btn:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 8px 25px rgba(139, 92, 246, 0.4);
             }
             
             .container {
@@ -443,21 +398,439 @@ function generateMinimalHTML() {
                 position: relative;
             }
             
-            .main-card {
-                background: var(--surface);
-                backdrop-filter: blur(20px);
-                border-radius: 24px;
-                padding: 50px 40px;
-                border: 1px solid rgba(255, 255, 255, 0.1);
+            .hero-section {
                 text-align: center;
-                max-width: 500px;
-                width: 100%;
+                max-width: 800px;
+                margin: 0 auto;
+            }
+            
+            .hero-title {
+                font-size: 4rem;
+                font-weight: 700;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                margin-bottom: 20px;
+                line-height: 1.1;
+            }
+            
+            .hero-subtitle {
+                font-size: 1.3rem;
+                color: var(--text-secondary);
+                margin-bottom: 40px;
+                line-height: 1.6;
+            }
+            
+            .create-btn {
+                background: var(--gradient);
+                border: none;
+                padding: 18px 36px;
+                border-radius: 16px;
+                color: white;
+                font-size: 1.2rem;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                backdrop-filter: blur(10px);
+                border: 1px solid var(--glass-border);
                 position: relative;
                 overflow: hidden;
+            }
+            
+            .create-btn::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                left: -100%;
+                width: 100%;
+                height: 100%;
+                background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+                transition: left 0.5s;
+            }
+            
+            .create-btn:hover::before {
+                left: 100%;
+            }
+            
+            .create-btn:hover {
+                transform: translateY(-3px);
+                box-shadow: 0 12px 35px rgba(139, 92, 246, 0.5);
+            }
+            
+            .footer {
+                position: fixed;
+                bottom: 0;
+                width: 100%;
+                text-align: center;
+                padding: 20px;
+                color: var(--text-secondary);
+                font-size: 0.9rem;
+            }
+            
+            /* Modal styles */
+            .modal {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.8);
+                backdrop-filter: blur(10px);
+                z-index: 2000;
+                align-items: center;
+                justify-content: center;
+            }
+            
+            .modal-content {
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+                border: 1px solid var(--glass-border);
+                border-radius: 20px;
+                padding: 40px;
+                max-width: 400px;
+                width: 90%;
+                box-shadow: var(--glass-shadow);
+            }
+            
+            .modal-title {
+                font-size: 1.8rem;
+                font-weight: 600;
+                margin-bottom: 20px;
+                text-align: center;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            
+            .form-group {
+                margin-bottom: 20px;
+            }
+            
+            .form-input {
+                width: 100%;
+                padding: 12px 16px;
+                background: rgba(255, 255, 255, 0.1);
+                border: 1px solid var(--glass-border);
+                border-radius: 10px;
+                color: var(--text);
+                font-size: 1rem;
                 transition: all 0.3s ease;
             }
             
-            .main-card::before {
+            .form-input:focus {
+                outline: none;
+                border-color: var(--primary);
+                box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.3);
+            }
+            
+            .submit-btn {
+                width: 100%;
+                background: var(--gradient);
+                border: none;
+                padding: 14px;
+                border-radius: 10px;
+                color: white;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s ease;
+            }
+            
+            .submit-btn:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 8px 20px rgba(139, 92, 246, 0.4);
+            }
+            
+            .switch-btn {
+                color: var(--primary);
+                background: none;
+                border: none;
+                cursor: pointer;
+                font-weight: 500;
+                margin-top: 15px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="liquid-glass-effect"></div>
+        
+        <div class="header">
+            <button class="login-btn" onclick="showLoginModal()">Вход+</button>
+        </div>
+        
+        <div class="container">
+            <div class="hero-section">
+                <h1 class="hero-title">Фарм часов Steam</h1>
+                <p class="hero-subtitle">
+                    Это сайт для бесплатного фарма часов в Steam.<br>
+                    Добавляй до 5 аккаунтов и управляй фармом в одном месте.
+                </p>
+                <button class="create-btn" onclick="showRegisterModal()">Создать аккаунт+</button>
+            </div>
+        </div>
+        
+        <div class="footer">
+            Powered by kinel
+        </div>
+        
+        <!-- Login Modal -->
+        <div class="modal" id="loginModal">
+            <div class="modal-content">
+                <h2 class="modal-title">Вход в аккаунт</h2>
+                <form id="loginForm">
+                    <div class="form-group">
+                        <input type="text" class="form-input" placeholder="Логин" name="username" required>
+                    </div>
+                    <div class="form-group">
+                        <input type="password" class="form-input" placeholder="Пароль" name="password" required>
+                    </div>
+                    <button type="submit" class="submit-btn">Войти</button>
+                </form>
+                <button class="switch-btn" onclick="showRegisterModal()">Нет аккаунта? Зарегистрируйтесь</button>
+            </div>
+        </div>
+        
+        <!-- Register Modal -->
+        <div class="modal" id="registerModal">
+            <div class="modal-content">
+                <h2 class="modal-title">Создать аккаунт</h2>
+                <form id="registerForm">
+                    <div class="form-group">
+                        <input type="text" class="form-input" placeholder="Логин" name="username" required>
+                    </div>
+                    <div class="form-group">
+                        <input type="password" class="form-input" placeholder="Пароль" name="password" required>
+                    </div>
+                    <button type="submit" class="submit-btn">Создать аккаунт</button>
+                </form>
+                <button class="switch-btn" onclick="showLoginModal()">Уже есть аккаунт? Войдите</button>
+            </div>
+        </div>
+        
+        <script>
+            function showLoginModal() {
+                document.getElementById('loginModal').style.display = 'flex';
+                document.getElementById('registerModal').style.display = 'none';
+            }
+            
+            function showRegisterModal() {
+                document.getElementById('registerModal').style.display = 'flex';
+                document.getElementById('loginModal').style.display = 'none';
+            }
+            
+            function hideModals() {
+                document.getElementById('loginModal').style.display = 'none';
+                document.getElementById('registerModal').style.display = 'none';
+            }
+            
+            // Close modal on outside click
+            document.addEventListener('click', function(event) {
+                const modals = document.querySelectorAll('.modal');
+                modals.forEach(modal => {
+                    if (event.target === modal) {
+                        modal.style.display = 'none';
+                    }
+                });
+            });
+            
+            // Login form handler
+            document.getElementById('loginForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const formData = new FormData(this);
+                const data = {
+                    username: formData.get('username'),
+                    password: formData.get('password')
+                };
+                
+                try {
+                    const response = await fetch('/api/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(data)
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        localStorage.setItem('token', result.token);
+                        if (result.user.is_admin) {
+                            window.location.href = '/admin';
+                        } else {
+                            window.location.href = '/dashboard';
+                        }
+                    } else {
+                        alert(result.error);
+                    }
+                } catch (error) {
+                    alert('Ошибка соединения');
+                }
+            });
+            
+            // Register form handler
+            document.getElementById('registerForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const formData = new FormData(this);
+                const data = {
+                    username: formData.get('username'),
+                    password: formData.get('password')
+                };
+                
+                try {
+                    const response = await fetch('/api/register', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(data)
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        alert('Аккаунт создан! Теперь войдите.');
+                        showLoginModal();
+                    } else {
+                        alert(result.error);
+                    }
+                } catch (error) {
+                    alert('Ошибка соединения');
+                }
+            });
+            
+            // Check if user is already logged in
+            const token = localStorage.getItem('token');
+            if (token) {
+                // Verify token and redirect
+                try {
+                    const payload = JSON.parse(atob(token.split('.')[1]));
+                    if (payload.is_admin) {
+                        window.location.href = '/admin';
+                    } else {
+                        window.location.href = '/dashboard';
+                    }
+                } catch (e) {
+                    localStorage.removeItem('token');
+                }
+            }
+        </script>
+    </body>
+    </html>
+    `);
+});
+
+app.get('/dashboard', (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Мои аккаунты • Steam Farm</title>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            
+            :root {
+                --primary: #8B5CF6;
+                --secondary: #7C3AED;
+                --accent: #A78BFA;
+                --background: #0F0F23;
+                --surface: rgba(255, 255, 255, 0.05);
+                --text: #E2E8F0;
+                --text-secondary: #94A3B8;
+                --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
+                --glass: rgba(255, 255, 255, 0.1);
+                --glass-border: rgba(255, 255, 255, 0.2);
+                --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            }
+            
+            body {
+                font-family: 'Inter', sans-serif;
+                background: var(--background);
+                color: var(--text);
+                min-height: 100vh;
+            }
+            
+            .liquid-glass-effect {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: 
+                    radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
+                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.15) 0%, transparent 50%);
+                backdrop-filter: blur(40px);
+                -webkit-backdrop-filter: blur(40px);
+                z-index: -2;
+            }
+            
+            .header {
+                padding: 20px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-bottom: 1px solid var(--glass-border);
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+            }
+            
+            .logo {
+                font-size: 1.5rem;
+                font-weight: 700;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            
+            .user-menu {
+                display: flex;
+                align-items: center;
+                gap: 15px;
+            }
+            
+            .logout-btn {
+                background: none;
+                border: 1px solid var(--glass-border);
+                color: var(--text);
+                padding: 8px 16px;
+                border-radius: 8px;
+                cursor: pointer;
+                transition: all 0.3s ease;
+            }
+            
+            .logout-btn:hover {
+                background: rgba(255, 255, 255, 0.1);
+            }
+            
+            .container {
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 40px 20px;
+            }
+            
+            .accounts-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                gap: 20px;
+                margin-bottom: 40px;
+            }
+            
+            .account-card {
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+                border: 1px solid var(--glass-border);
+                border-radius: 16px;
+                padding: 24px;
+                transition: all 0.3s ease;
+                position: relative;
+                overflow: hidden;
+            }
+            
+            .account-card::before {
                 content: '';
                 position: absolute;
                 top: 0;
@@ -467,467 +840,780 @@ function generateMinimalHTML() {
                 background: var(--gradient);
             }
             
-            .profile-header {
-                margin-bottom: 30px;
+            .account-card:hover {
+                transform: translateY(-5px);
+                box-shadow: var(--glass-shadow);
             }
             
-            .avatar {
-                width: 80px;
-                height: 80px;
-                border-radius: 50%;
-                border: 3px solid var(--primary);
-                margin: 0 auto 15px;
-                background: var(--gradient);
-                padding: 2px;
-            }
-            
-            .avatar img {
-                width: 100%;
-                height: 100%;
-                border-radius: 50%;
-                object-fit: cover;
-            }
-            
-            .profile-name {
-                font-size: 1.8rem;
+            .account-name {
+                font-size: 1.3rem;
                 font-weight: 600;
+                margin-bottom: 10px;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            
+            .account-info {
+                margin-bottom: 15px;
+            }
+            
+            .info-item {
                 margin-bottom: 5px;
-                background: var(--gradient);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            }
-            
-            .hours-display {
-                margin: 40px 0;
-            }
-            
-            .hours-label {
-                font-size: 1rem;
-                color: var(--text-secondary);
-                margin-bottom: 10px;
-                text-transform: uppercase;
-                letter-spacing: 0.1em;
-            }
-            
-            .hours-value {
-                font-size: 4rem;
-                font-weight: 700;
-                background: var(--gradient);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-                line-height: 1;
-                margin-bottom: 10px;
-                font-feature-settings: 'tnum';
-            }
-            
-            .hours-subtitle {
-                font-size: 1.2rem;
+                font-size: 0.9rem;
                 color: var(--text-secondary);
             }
             
-            /* Farm Controls */
+            .password-hover {
+                position: relative;
+                cursor: help;
+            }
+            
+            .password-hover:hover::after {
+                content: attr(data-password);
+                position: absolute;
+                bottom: 100%;
+                left: 0;
+                background: var(--background);
+                border: 1px solid var(--glass-border);
+                padding: 5px 10px;
+                border-radius: 6px;
+                font-size: 0.8rem;
+                white-space: nowrap;
+                z-index: 10;
+            }
+            
             .farm-controls {
-                margin: 30px 0;
-                padding: 25px;
-                background: rgba(255, 255, 255, 0.03);
-                border-radius: 16px;
-                border: 1px solid rgba(255, 255, 255, 0.1);
-            }
-            
-            .farm-title {
-                font-size: 1.2rem;
-                font-weight: 600;
-                margin-bottom: 15px;
-                color: var(--text);
-            }
-            
-            .farm-buttons {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 12px;
-                margin-bottom: 15px;
+                display: flex;
+                gap: 10px;
+                margin-top: 15px;
             }
             
             .farm-btn {
-                padding: 12px 20px;
+                flex: 1;
+                padding: 8px 12px;
                 border: none;
-                border-radius: 12px;
-                font-weight: 600;
+                border-radius: 8px;
+                font-weight: 500;
                 cursor: pointer;
                 transition: all 0.3s ease;
-                font-family: inherit;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 8px;
+                font-size: 0.9rem;
             }
             
             .farm-btn.start {
-                background: var(--success);
+                background: var(--primary);
                 color: white;
             }
             
             .farm-btn.stop {
-                background: var(--error);
+                background: #EF4444;
                 color: white;
             }
             
-            .farm-btn:hover {
-                transform: translateY(-2px);
-                box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
-            }
-            
             .farm-btn:disabled {
-                opacity: 0.6;
+                opacity: 0.5;
                 cursor: not-allowed;
-                transform: none;
             }
             
             .farm-status {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 8px;
-                font-size: 0.9rem;
-                padding: 10px;
-                border-radius: 8px;
-                background: rgba(255, 255, 255, 0.05);
-            }
-            
-            .status-online {
-                color: var(--success);
-            }
-            
-            .status-offline {
-                color: var(--text-secondary);
+                margin-top: 10px;
+                padding: 8px;
+                border-radius: 6px;
+                font-size: 0.8rem;
+                text-align: center;
             }
             
             .status-farming {
-                color: var(--warning);
-                animation: glow 2s ease-in-out infinite;
+                background: rgba(16, 185, 129, 0.2);
+                color: #10B981;
             }
             
-            .status-error {
-                color: var(--error);
-            }
-            
-            .status-info {
-                margin-top: 30px;
-                padding-top: 20px;
-                border-top: 1px solid rgba(255, 255, 255, 0.1);
-            }
-            
-            .last-update {
+            .status-stopped {
+                background: rgba(107, 114, 128, 0.2);
                 color: var(--text-secondary);
-                font-size: 0.85rem;
+            }
+            
+            .add-account-card {
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+                border: 2px dashed var(--glass-border);
+                border-radius: 16px;
+                padding: 40px 24px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                text-align: center;
+            }
+            
+            .add-account-card:hover {
+                border-color: var(--primary);
+                transform: translateY(-5px);
+            }
+            
+            .add-icon {
+                font-size: 2rem;
+                color: var(--primary);
                 margin-bottom: 10px;
             }
             
-            .update-status {
-                display: flex;
+            /* Modal styles */
+            .modal {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.8);
+                backdrop-filter: blur(10px);
+                z-index: 2000;
                 align-items: center;
                 justify-content: center;
-                gap: 8px;
+            }
+            
+            .modal-content {
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+                border: 1px solid var(--glass-border);
+                border-radius: 20px;
+                padding: 30px;
+                max-width: 500px;
+                width: 90%;
+                max-height: 90vh;
+                overflow-y: auto;
+                box-shadow: var(--glass-shadow);
+            }
+            
+            .modal-title {
+                font-size: 1.5rem;
+                font-weight: 600;
+                margin-bottom: 20px;
+                text-align: center;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            
+            .form-group {
+                margin-bottom: 15px;
+            }
+            
+            .form-label {
+                display: block;
+                margin-bottom: 5px;
+                font-weight: 500;
+                color: var(--text-secondary);
+            }
+            
+            .form-input, .form-select {
+                width: 100%;
+                padding: 10px 12px;
+                background: rgba(255, 255, 255, 0.1);
+                border: 1px solid var(--glass-border);
+                border-radius: 8px;
+                color: var(--text);
+                font-size: 0.9rem;
+                transition: all 0.3s ease;
+            }
+            
+            .form-input:focus, .form-select:focus {
+                outline: none;
+                border-color: var(--primary);
+                box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.3);
+            }
+            
+            .form-hint {
                 font-size: 0.8rem;
+                color: var(--text-secondary);
+                margin-top: 5px;
             }
             
-            .loading-spinner {
-                width: 16px;
-                height: 16px;
-                border: 2px solid transparent;
-                border-top: 2px solid currentColor;
-                border-radius: 50%;
-                animation: spin 1s linear infinite;
+            .submit-btn {
+                width: 100%;
+                background: var(--gradient);
+                border: none;
+                padding: 12px;
+                border-radius: 8px;
+                color: white;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                margin-top: 10px;
             }
             
-            .floating {
-                animation: float 3s ease-in-out infinite;
+            .submit-btn:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 8px 20px rgba(139, 92, 246, 0.4);
             }
             
-            @keyframes float {
-                0%, 100% { transform: translateY(0px); }
-                50% { transform: translateY(-10px); }
-            }
-            
-            @keyframes spin {
-                0% { transform: rotate(0deg); }
-                100% { transform: rotate(360deg); }
-            }
-            
-            @keyframes glow {
-                0%, 100% { opacity: 1; }
-                50% { opacity: 0.7; }
-            }
-            
-            @media (max-width: 768px) {
-                .container {
-                    padding: 20px 16px;
-                }
-                
-                .main-card {
-                    padding: 40px 30px;
-                }
-                
-                .hours-value {
-                    font-size: 3rem;
-                }
-                
-                .farm-buttons {
-                    grid-template-columns: 1fr;
-                }
+            .close-btn {
+                position: absolute;
+                top: 15px;
+                right: 15px;
+                background: none;
+                border: none;
+                color: var(--text-secondary);
+                font-size: 1.2rem;
+                cursor: pointer;
             }
         </style>
     </head>
     <body>
-        <div class="parallax-bg"></div>
-        <div class="particles" id="particles"></div>
+        <div class="liquid-glass-effect"></div>
+        
+        <div class="header">
+            <div class="logo">Steam Farm</div>
+            <div class="user-menu">
+                <span id="usernameDisplay"></span>
+                <button class="logout-btn" onclick="logout()">Выйти</button>
+            </div>
+        </div>
         
         <div class="container">
-            <div class="main-card floating">
-                <div class="profile-header">
-                    <div class="avatar">
-                        <img src="https://avatars.steamstatic.com/6b9d2c1c9c8b1c9c8b1c9c8b1c9c8b1c9c8b1c9c_full.jpg" alt="точка">
+            <div class="accounts-grid" id="accountsGrid">
+                <!-- Accounts will be loaded here -->
+            </div>
+        </div>
+        
+        <!-- Add Account Modal -->
+        <div class="modal" id="addAccountModal">
+            <div class="modal-content">
+                <button class="close-btn" onclick="hideAddAccountModal()">×</button>
+                <h2 class="modal-title">Добавить Steam аккаунт</h2>
+                <form id="addAccountForm">
+                    <div class="form-group">
+                        <label class="form-label">Имя аккаунта</label>
+                        <input type="text" class="form-input" name="name" placeholder="Мой основной аккаунт" required>
                     </div>
-                    <div class="profile-name">точка</div>
-                    <div class="profile-id">${CONFIG.STEAM_ID}</div>
-                </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Логин Steam</label>
+                        <input type="text" class="form-input" name="username" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Пароль Steam</label>
+                        <input type="password" class="form-input" name="password" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Айди игр для фарма</label>
+                        <input type="text" class="form-input" name="games" value="730" required>
+                        <div class="form-hint">Через запятую. Максимум 32 айди. CS2 = 730</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Режим скрытности</label>
+                        <select class="form-select" name="stealth_mode">
+                            <option value="false">В сети (Status: 1)</option>
+                            <option value="true">Не в сети (Status: 7)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Время фарма</label>
+                        <select class="form-select" name="farm_days">
+                            <option value="1">1 день</option>
+                            <option value="3">3 дня</option>
+                            <option value="7">7 дней</option>
+                            <option value="0" selected>Навсегда</option>
+                        </select>
+                    </div>
+                    
+                    <button type="submit" class="submit-btn">Добавить аккаунт</button>
+                </form>
+            </div>
+        </div>
+        
+        <script>
+            const token = localStorage.getItem('token');
+            if (!token) {
+                window.location.href = '/';
+            }
+            
+            // Decode token to get username
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                document.getElementById('usernameDisplay').textContent = payload.username;
+            } catch (e) {
+                logout();
+            }
+            
+            async function loadAccounts() {
+                try {
+                    const response = await fetch('/api/accounts', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    
+                    const data = await response.json();
+                    displayAccounts(data.accounts);
+                } catch (error) {
+                    console.error('Error loading accounts:', error);
+                }
+            }
+            
+            function displayAccounts(accounts) {
+                const grid = document.getElementById('accountsGrid');
+                grid.innerHTML = '';
                 
-                <div class="hours-display">
-                    <div class="hours-label">Часов в Counter-Strike 2</div>
-                    <div class="hours-value" id="hours-value">${state.cs2Hours}</div>
-                    <div class="hours-subtitle">Накоплено за всё время</div>
-                </div>
+                accounts.forEach(account => {
+                    const accountCard = createAccountCard(account);
+                    grid.appendChild(accountCard);
+                });
                 
-                <!-- Farm Controls -->
-                <div class="farm-controls">
-                    <div class="farm-title">Управление фармом часов</div>
-                    <div class="farm-buttons">
-                        <button class="farm-btn start" onclick="startFarming()" id="start-btn">
-                            <i class="fas fa-play"></i> Запустить фарм
+                // Add "Add Account" card if less than 5 accounts
+                if (accounts.length < 5) {
+                    const addCard = document.createElement('div');
+                    addCard.className = 'account-card add-account-card';
+                    addCard.onclick = showAddAccountModal;
+                    addCard.innerHTML = \`
+                        <div class="add-icon">+</div>
+                        <div>Добавить аккаунт</div>
+                        <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 5px;">
+                            Осталось слотов: ${5 - accounts.length}
+                        </div>
+                    \`;
+                    grid.appendChild(addCard);
+                }
+            }
+            
+            function createAccountCard(account) {
+                const card = document.createElement('div');
+                card.className = 'account-card';
+                card.innerHTML = \`
+                    <div class="account-name">\${account.name}</div>
+                    <div class="account-info">
+                        <div class="info-item">Логин: \${account.username}</div>
+                        <div class="info-item password-hover" data-password="\${account.password}">
+                            Пароль: ••••••••
+                        </div>
+                        <div class="info-item">Игры: \${account.games}</div>
+                        <div class="info-item">Режим: \${account.stealth_mode ? 'Не в сети' : 'В сети'}</div>
+                        <div class="info-item">Фарм: \${getFarmDaysText(account.farm_days)}</div>
+                    </div>
+                    <div class="farm-controls">
+                        <button class="farm-btn start" onclick="startFarming(\${account.id})" 
+                                \${account.isFarming ? 'disabled' : ''}>
+                            <i class="fas fa-play"></i> Старт
                         </button>
-                        <button class="farm-btn stop" onclick="stopFarming()" id="stop-btn">
-                            <i class="fas fa-stop"></i> Остановить
+                        <button class="farm-btn stop" onclick="stopFarming(\${account.id})" 
+                                \${!account.isFarming ? 'disabled' : ''}>
+                            <i class="fas fa-stop"></i> Стоп
                         </button>
                     </div>
-                    <div class="farm-status" id="farm-status">
-                        <i class="fas fa-circle"></i>
-                        <span id="farm-status-text">Фарм остановлен</span>
-                    </div>
-                </div>
-                
-                <div class="status-info">
-                    <div class="last-update" id="last-update">
-                        ${state.lastUpdate ? `Обновлено: ${state.lastUpdate.toLocaleString('ru-RU')}` : 'Загрузка...'}
-                    </div>
-                    <div class="update-status" id="update-status">
-                        ${state.isLoading ? 
-                            '<div class="status-farming"><div class="loading-spinner"></div> Обновление данных...</div>' :
-                            state.error ? 
-                            '<div class="status-error"><i class="fas fa-exclamation-triangle"></i> Ошибка данных</div>' :
-                            '<div class="status-online"><i class="fas fa-check-circle"></i> Данные актуальны</div>'
+                    <div class="farm-status \${account.isFarming ? 'status-farming' : 'status-stopped'}">
+                        \${account.isFarming ? 
+                            \`Фарм активен • \${Math.floor(account.farmingTime / 60)}ч \${account.farmingTime % 60}м\` : 
+                            'Фарм остановлен'
                         }
                     </div>
+                \`;
+                return card;
+            }
+            
+            function getFarmDaysText(days) {
+                if (days === 0) return 'Навсегда';
+                if (days === 1) return '1 день';
+                return \`\${days} дней\`;
+            }
+            
+            function showAddAccountModal() {
+                document.getElementById('addAccountModal').style.display = 'flex';
+            }
+            
+            function hideAddAccountModal() {
+                document.getElementById('addAccountModal').style.display = 'none';
+            }
+            
+            async function startFarming(accountId) {
+                try {
+                    const response = await fetch(\`/api/farm/start/\${accountId}\`, {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    
+                    const result = await response.json();
+                    if (result.success) {
+                        loadAccounts(); // Reload accounts to update status
+                    } else {
+                        alert(result.error);
+                    }
+                } catch (error) {
+                    alert('Ошибка запуска фарма');
+                }
+            }
+            
+            async function stopFarming(accountId) {
+                try {
+                    const response = await fetch(\`/api/farm/stop/\${accountId}\`, {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    
+                    const result = await response.json();
+                    if (result.success) {
+                        loadAccounts(); // Reload accounts to update status
+                    } else {
+                        alert(result.error);
+                    }
+                } catch (error) {
+                    alert('Ошибка остановки фарма');
+                }
+            }
+            
+            document.getElementById('addAccountForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const formData = new FormData(this);
+                const data = {
+                    name: formData.get('name'),
+                    username: formData.get('username'),
+                    password: formData.get('password'),
+                    games: formData.get('games'),
+                    stealth_mode: formData.get('stealth_mode') === 'true',
+                    farm_days: parseInt(formData.get('farm_days'))
+                };
+                
+                try {
+                    const response = await fetch('/api/accounts', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': 'Bearer ' + token
+                        },
+                        body: JSON.stringify(data)
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        hideAddAccountModal();
+                        this.reset();
+                        loadAccounts();
+                    } else {
+                        alert(result.error);
+                    }
+                } catch (error) {
+                    alert('Ошибка создания аккаунта');
+                }
+            });
+            
+            function logout() {
+                localStorage.removeItem('token');
+                window.location.href = '/';
+            }
+            
+            // Close modal on outside click
+            document.addEventListener('click', function(event) {
+                if (event.target === document.getElementById('addAccountModal')) {
+                    hideAddAccountModal();
+                }
+            });
+            
+            // Load accounts on page load
+            loadAccounts();
+            // Refresh accounts every 30 seconds
+            setInterval(loadAccounts, 30000);
+        </script>
+    </body>
+    </html>
+    `);
+});
+
+app.get('/admin', (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Админ панель • Steam Farm</title>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            
+            :root {
+                --primary: #8B5CF6;
+                --secondary: #7C3AED;
+                --accent: #A78BFA;
+                --background: #0F0F23;
+                --surface: rgba(255, 255, 255, 0.05);
+                --text: #E2E8F0;
+                --text-secondary: #94A3B8;
+                --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
+                --glass: rgba(255, 255, 255, 0.1);
+                --glass-border: rgba(255, 255, 255, 0.2);
+                --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            }
+            
+            body {
+                font-family: 'Inter', sans-serif;
+                background: var(--background);
+                color: var(--text);
+                min-height: 100vh;
+            }
+            
+            .liquid-glass-effect {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: 
+                    radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
+                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.15) 0%, transparent 50%);
+                backdrop-filter: blur(40px);
+                -webkit-backdrop-filter: blur(40px);
+                z-index: -2;
+            }
+            
+            .header {
+                padding: 20px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-bottom: 1px solid var(--glass-border);
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+            }
+            
+            .logo {
+                font-size: 1.5rem;
+                font-weight: 700;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            
+            .user-menu {
+                display: flex;
+                align-items: center;
+                gap: 15px;
+            }
+            
+            .logout-btn {
+                background: none;
+                border: 1px solid var(--glass-border);
+                color: var(--text);
+                padding: 8px 16px;
+                border-radius: 8px;
+                cursor: pointer;
+                transition: all 0.3s ease;
+            }
+            
+            .logout-btn:hover {
+                background: rgba(255, 255, 255, 0.1);
+            }
+            
+            .container {
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 40px 20px;
+            }
+            
+            .stats-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+                gap: 20px;
+                margin-bottom: 40px;
+            }
+            
+            .stat-card {
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+                border: 1px solid var(--glass-border);
+                border-radius: 16px;
+                padding: 24px;
+                text-align: center;
+                position: relative;
+                overflow: hidden;
+            }
+            
+            .stat-card::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 2px;
+                background: var(--gradient);
+            }
+            
+            .stat-value {
+                font-size: 2.5rem;
+                font-weight: 700;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                margin-bottom: 10px;
+            }
+            
+            .stat-label {
+                color: var(--text-secondary);
+                font-size: 0.9rem;
+            }
+            
+            .users-table {
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+                border: 1px solid var(--glass-border);
+                border-radius: 16px;
+                overflow: hidden;
+            }
+            
+            .table-header {
+                padding: 20px;
+                border-bottom: 1px solid var(--glass-border);
+                font-weight: 600;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            
+            .table-row {
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr 1fr;
+                padding: 15px 20px;
+                border-bottom: 1px solid var(--glass-border);
+                align-items: center;
+            }
+            
+            .table-row:last-child {
+                border-bottom: none;
+            }
+            
+            .table-row:hover {
+                background: rgba(255, 255, 255, 0.05);
+            }
+            
+            .admin-badge {
+                background: var(--gradient);
+                color: white;
+                padding: 4px 8px;
+                border-radius: 6px;
+                font-size: 0.7rem;
+                font-weight: 600;
+            }
+            
+            .loading {
+                text-align: center;
+                padding: 40px;
+                color: var(--text-secondary);
+            }
+        </style>
+    </head>
+    <body>
+        <div class="liquid-glass-effect"></div>
+        
+        <div class="header">
+            <div class="logo">Steam Farm • Админ</div>
+            <div class="user-menu">
+                <span id="usernameDisplay"></span>
+                <button class="logout-btn" onclick="logout()">Выйти</button>
+            </div>
+        </div>
+        
+        <div class="container">
+            <div class="stats-grid" id="statsGrid">
+                <div class="loading">Загрузка статистики...</div>
+            </div>
+            
+            <div class="users-table">
+                <div class="table-header">Пользователи системы</div>
+                <div id="usersList">
+                    <div class="loading">Загрузка пользователей...</div>
                 </div>
             </div>
         </div>
         
         <script>
-            class ParticleSystem {
-                constructor() {
-                    this.particles = [];
-                    this.container = document.getElementById('particles');
-                    this.init();
-                }
-                
-                init() {
-                    for (let i = 0; i < 20; i++) {
-                        this.createParticle();
-                    }
-                }
-                
-                createParticle() {
-                    const particle = document.createElement('div');
-                    particle.className = 'particle';
-                    
-                    const size = Math.random() * 4 + 1;
-                    const posX = Math.random() * 100;
-                    const posY = Math.random() * 100;
-                    const delay = Math.random() * 5;
-                    const duration = Math.random() * 3 + 3;
-                    
-                    particle.style.width = size + 'px';
-                    particle.style.height = size + 'px';
-                    particle.style.left = posX + '%';
-                    particle.style.top = posY + '%';
-                    particle.style.animationDelay = delay + 's';
-                    particle.style.animationDuration = duration + 's';
-                    
-                    this.container.appendChild(particle);
-                    this.particles.push(particle);
-                }
+            const token = localStorage.getItem('token');
+            if (!token) {
+                window.location.href = '/';
             }
             
-            class FarmManager {
-                constructor() {
-                    this.isUpdating = false;
-                    this.init();
-                }
+            // Verify admin rights
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                document.getElementById('usernameDisplay').textContent = payload.username + ' (Admin)';
                 
-                init() {
-                    this.updateData();
-                    setInterval(() => this.updateData(), ${CONFIG.UPDATE_INTERVAL});
-                    this.updateFarmStatus();
-                    setInterval(() => this.updateFarmStatus(), 5000);
-                    
-                    window.addEventListener('scroll', this.handleParallax.bind(this));
-                    this.handleParallax();
+                if (!payload.is_admin) {
+                    window.location.href = '/dashboard';
                 }
-                
-                async updateData() {
-                    if (this.isUpdating) return;
-                    
-                    this.isUpdating = true;
-                    this.setStatus('loading', 'Обновление данных...');
-                    
-                    try {
-                        const response = await fetch('/api/cs2-hours');
-                        const data = await response.json();
-                        
-                        if (data.hours) {
-                            document.getElementById('hours-value').textContent = data.hours;
-                        }
-                        
-                        if (data.lastUpdate) {
-                            const date = new Date(data.lastUpdate);
-                            document.getElementById('last-update').textContent = 
-                                'Обновлено: ' + date.toLocaleString('ru-RU');
-                        }
-                        
-                        if (data.error) {
-                            this.setStatus('error', 'Ошибка данных');
-                        } else {
-                            this.setStatus('success', 'Данные актуальны');
-                        }
-                        
-                    } catch (error) {
-                        this.setStatus('error', 'Ошибка соединения');
-                    } finally {
-                        this.isUpdating = false;
-                    }
-                }
-                
-                async updateFarmStatus() {
-                    try {
-                        const response = await fetch('/api/farm/status');
-                        const data = await response.json();
-                        this.updateFarmUI(data);
-                    } catch (error) {
-                        console.log('Ошибка получения статуса фарма:', error);
-                    }
-                }
-                
-                updateFarmUI(status) {
-                    const statusEl = document.getElementById('farm-status');
-                    const statusText = document.getElementById('farm-status-text');
-                    const startBtn = document.getElementById('start-btn');
-                    const stopBtn = document.getElementById('stop-btn');
-                    
-                    statusEl.className = 'farm-status';
-                    
-                    if (status.farmStatus === 'running') {
-                        statusEl.classList.add('status-farming');
-                        statusText.textContent = 'Фарм активен • Часы накручиваются';
-                        startBtn.disabled = true;
-                        stopBtn.disabled = false;
-                    } else if (status.botStatus === 'online') {
-                        statusEl.classList.add('status-online');
-                        statusText.textContent = 'Бот онлайн • Фарм готов';
-                        startBtn.disabled = false;
-                        stopBtn.disabled = false;
-                    } else if (status.botStatus === 'error') {
-                        statusEl.classList.add('status-error');
-                        statusText.textContent = 'Ошибка бота';
-                        startBtn.disabled = false;
-                        stopBtn.disabled = true;
-                    } else {
-                        statusEl.classList.add('status-offline');
-                        statusText.textContent = 'Фарм остановлен';
-                        startBtn.disabled = false;
-                        stopBtn.disabled = true;
-                    }
-                }
-                
-                setStatus(type, message) {
-                    const statusEl = document.getElementById('update-status');
-                    let html = '';
-                    
-                    switch (type) {
-                        case 'loading':
-                            html = '<div class="status-farming"><div class="loading-spinner"></div> ' + message + '</div>';
-                            break;
-                        case 'error':
-                            html = '<div class="status-error"><i class="fas fa-exclamation-triangle"></i> ' + message + '</div>';
-                            break;
-                        case 'success':
-                            html = '<div class="status-online"><i class="fas fa-check-circle"></i> ' + message + '</div>';
-                            break;
-                    }
-                    
-                    statusEl.innerHTML = html;
-                }
-                
-                handleParallax() {
-                    const scrolled = window.pageYOffset;
-                    const parallax = document.querySelector('.parallax-bg');
-                    if (parallax) {
-                        parallax.style.transform = \`translateY(\${scrolled * 0.4}px)\`;
-                    }
-                }
+            } catch (e) {
+                logout();
             }
             
-            // Глобальные функции для кнопок
-            async function startFarming() {
+            async function loadAdminStats() {
                 try {
-                    const response = await fetch('/api/farm/start', { method: 'POST' });
+                    const response = await fetch('/api/admin/stats', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    
                     const data = await response.json();
-                    console.log('Фарм запущен:', data.message);
+                    displayStats(data);
+                    displayUsers(data.users);
                 } catch (error) {
-                    console.error('Ошибка запуска фарма:', error);
+                    console.error('Error loading admin stats:', error);
                 }
             }
             
-            async function stopFarming() {
-                try {
-                    const response = await fetch('/api/farm/stop', { method: 'POST' });
-                    const data = await response.json();
-                    console.log('Фарм остановлен:', data.message);
-                } catch (error) {
-                    console.error('Ошибка остановки фарма:', error);
-                }
+            function displayStats(stats) {
+                const grid = document.getElementById('statsGrid');
+                grid.innerHTML = \`
+                    <div class="stat-card">
+                        <div class="stat-value">\${stats.totalUsers}</div>
+                        <div class="stat-label">Всего пользователей</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">\${stats.totalAccounts}</div>
+                        <div class="stat-label">Steam аккаунтов</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">\${stats.activeFarms}</div>
+                        <div class="stat-label">Активных фармов</div>
+                    </div>
+                \`;
             }
             
-            // Инициализация
-            document.addEventListener('DOMContentLoaded', () => {
-                new ParticleSystem();
-                new FarmManager();
-            });
+            function displayUsers(users) {
+                const usersList = document.getElementById('usersList');
+                usersList.innerHTML = '';
+                
+                users.forEach(user => {
+                    const row = document.createElement('div');
+                    row.className = 'table-row';
+                    row.innerHTML = \`
+                        <div>\${user.username}</div>
+                        <div>\${new Date(user.created_at).toLocaleDateString('ru-RU')}</div>
+                        <div>\${user.is_admin ? '<span class="admin-badge">Админ</span>' : 'Пользователь'}</div>
+                        <div>\${user.id === JSON.parse(atob(token.split('.')[1])).id ? 'Вы' : ''}</div>
+                    \`;
+                    usersList.appendChild(row);
+                });
+            }
+            
+            function logout() {
+                localStorage.removeItem('token');
+                window.location.href = '/';
+            }
+            
+            // Load stats on page load
+            loadAdminStats();
+            // Refresh stats every 30 seconds
+            setInterval(loadAdminStats, 30000);
         </script>
     </body>
     </html>
-    `;
-}
-
-// Инициализация
-console.log('🚀 Запуск CS2 Hours Monitor с фармом...');
-console.log(`🎯 Профиль: ${CONFIG.PROFILE_NAME}`);
-console.log(`🆔 SteamID: ${CONFIG.STEAM_ID}`);
-console.log(`🤖 Steam Bot: ${CONFIG.BOT_USERNAME}`);
-
-// Первоначальное обновление данных
-updateCS2Hours();
-
-// Авто-обновление по расписанию
-setInterval(updateCS2Hours, CONFIG.UPDATE_INTERVAL);
+    `);
+});
 
 // Запуск сервера
 app.listen(PORT, '0.0.0.0', () => {
