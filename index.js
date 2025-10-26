@@ -334,7 +334,7 @@ app.get('/api/admin/stats', authMiddleware, adminMiddleware, (req, res) => {
     });
 });
 
-// HTML Routes with Liquid Glass design
+// HTML Routes with Enhanced Liquid Glass design
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -361,9 +361,11 @@ app.get('/', (req, res) => {
                 --text: #E2E8F0;
                 --text-secondary: #94A3B8;
                 --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
-                --glass: rgba(255, 255, 255, 0.1);
-                --glass-border: rgba(255, 255, 255, 0.2);
-                --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+                --gradient-glow: linear-gradient(135deg, #8B5CF6, #7C3AED, #A78BFA);
+                --glass: rgba(255, 255, 255, 0.08);
+                --glass-border: rgba(255, 255, 255, 0.15);
+                --glass-shadow: 0 8px 32px rgba(139, 92, 246, 0.15);
+                --neon-glow: 0 0 20px rgba(139, 92, 246, 0.3);
             }
             
             body {
@@ -381,39 +383,75 @@ app.get('/', (req, res) => {
                 width: 100%;
                 height: 100%;
                 background: 
-                    radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
-                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.15) 0%, transparent 50%);
-                backdrop-filter: blur(40px);
-                -webkit-backdrop-filter: blur(40px);
+                    radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.2) 0%, transparent 50%),
+                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.2) 0%, transparent 50%),
+                    radial-gradient(circle at 40% 80%, rgba(167, 139, 250, 0.15) 0%, transparent 50%);
+                backdrop-filter: blur(60px) saturate(180%);
+                -webkit-backdrop-filter: blur(60px) saturate(180%);
                 z-index: -2;
+            }
+            
+            .floating-particles {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                z-index: -1;
+                overflow: hidden;
+            }
+            
+            .particle {
+                position: absolute;
+                background: var(--gradient-glow);
+                border-radius: 50%;
+                opacity: 0.1;
+                animation: float 6s ease-in-out infinite;
             }
             
             .header {
                 position: fixed;
                 top: 0;
                 width: 100%;
-                padding: 20px;
+                padding: 25px;
                 display: flex;
                 justify-content: flex-end;
                 z-index: 1000;
             }
             
             .login-btn {
-                background: var(--gradient);
-                border: none;
-                padding: 12px 24px;
-                border-radius: 12px;
+                background: linear-gradient(135deg, rgba(139, 92, 246, 0.9), rgba(124, 58, 237, 0.9));
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                padding: 14px 28px;
+                border-radius: 16px;
                 color: white;
                 font-weight: 600;
                 cursor: pointer;
-                transition: all 0.3s ease;
-                backdrop-filter: blur(10px);
-                border: 1px solid var(--glass-border);
+                transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+                backdrop-filter: blur(20px);
+                box-shadow: var(--glass-shadow), var(--neon-glow);
+                position: relative;
+                overflow: hidden;
+            }
+            
+            .login-btn::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                left: -100%;
+                width: 100%;
+                height: 100%;
+                background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+                transition: left 0.6s;
+            }
+            
+            .login-btn:hover::before {
+                left: 100%;
             }
             
             .login-btn:hover {
-                transform: translateY(-2px);
-                box-shadow: 0 8px 25px rgba(139, 92, 246, 0.4);
+                transform: translateY(-3px) scale(1.05);
+                box-shadow: 0 12px 35px rgba(139, 92, 246, 0.4), 0 0 30px rgba(139, 92, 246, 0.3);
             }
             
             .container {
@@ -428,39 +466,48 @@ app.get('/', (req, res) => {
             
             .hero-section {
                 text-align: center;
-                max-width: 800px;
+                max-width: 900px;
                 margin: 0 auto;
+                position: relative;
             }
             
             .hero-title {
-                font-size: 4rem;
-                font-weight: 700;
-                background: var(--gradient);
+                font-size: 5rem;
+                font-weight: 800;
+                background: linear-gradient(135deg, #8B5CF6, #7C3AED, #A78BFA);
                 -webkit-background-clip: text;
                 -webkit-text-fill-color: transparent;
-                margin-bottom: 20px;
+                margin-bottom: 25px;
                 line-height: 1.1;
+                text-shadow: 0 0 50px rgba(139, 92, 246, 0.3);
+                animation: titleGlow 3s ease-in-out infinite alternate;
             }
             
             .hero-subtitle {
-                font-size: 1.3rem;
+                font-size: 1.4rem;
                 color: var(--text-secondary);
-                margin-bottom: 40px;
-                line-height: 1.6;
+                margin-bottom: 50px;
+                line-height: 1.7;
+                background: rgba(255, 255, 255, 0.1);
+                backdrop-filter: blur(10px);
+                padding: 25px;
+                border-radius: 20px;
+                border: 1px solid var(--glass-border);
+                box-shadow: var(--glass-shadow);
             }
             
             .create-btn {
                 background: var(--gradient);
-                border: none;
-                padding: 18px 36px;
-                border-radius: 16px;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                padding: 22px 45px;
+                border-radius: 20px;
                 color: white;
-                font-size: 1.2rem;
-                font-weight: 600;
+                font-size: 1.3rem;
+                font-weight: 700;
                 cursor: pointer;
-                transition: all 0.3s ease;
-                backdrop-filter: blur(10px);
-                border: 1px solid var(--glass-border);
+                transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+                backdrop-filter: blur(20px);
+                box-shadow: var(--glass-shadow), var(--neon-glow);
                 position: relative;
                 overflow: hidden;
             }
@@ -472,8 +519,8 @@ app.get('/', (req, res) => {
                 left: -100%;
                 width: 100%;
                 height: 100%;
-                background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-                transition: left 0.5s;
+                background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+                transition: left 0.7s;
             }
             
             .create-btn:hover::before {
@@ -481,8 +528,8 @@ app.get('/', (req, res) => {
             }
             
             .create-btn:hover {
-                transform: translateY(-3px);
-                box-shadow: 0 12px 35px rgba(139, 92, 246, 0.5);
+                transform: translateY(-4px) scale(1.05);
+                box-shadow: 0 16px 40px rgba(139, 92, 246, 0.5), 0 0 40px rgba(139, 92, 246, 0.4);
             }
             
             .footer {
@@ -490,9 +537,12 @@ app.get('/', (req, res) => {
                 bottom: 0;
                 width: 100%;
                 text-align: center;
-                padding: 20px;
+                padding: 25px;
                 color: var(--text-secondary);
-                font-size: 0.9rem;
+                font-size: 1rem;
+                background: rgba(15, 15, 35, 0.8);
+                backdrop-filter: blur(20px);
+                border-top: 1px solid var(--glass-border);
             }
             
             /* Modal styles */
@@ -504,69 +554,77 @@ app.get('/', (req, res) => {
                 width: 100%;
                 height: 100%;
                 background: rgba(0, 0, 0, 0.8);
-                backdrop-filter: blur(10px);
+                backdrop-filter: blur(15px);
                 z-index: 2000;
                 align-items: center;
                 justify-content: center;
+                animation: modalAppear 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
             }
             
             .modal-content {
                 background: var(--glass);
-                backdrop-filter: blur(20px);
+                backdrop-filter: blur(30px);
                 border: 1px solid var(--glass-border);
-                border-radius: 20px;
-                padding: 40px;
-                max-width: 400px;
+                border-radius: 25px;
+                padding: 45px;
+                max-width: 450px;
                 width: 90%;
-                box-shadow: var(--glass-shadow);
+                box-shadow: var(--glass-shadow), var(--neon-glow);
+                animation: modalContentAppear 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
             }
             
             .modal-title {
-                font-size: 1.8rem;
-                font-weight: 600;
-                margin-bottom: 20px;
+                font-size: 2rem;
+                font-weight: 700;
+                margin-bottom: 25px;
                 text-align: center;
                 background: var(--gradient);
                 -webkit-background-clip: text;
                 -webkit-text-fill-color: transparent;
+                text-shadow: 0 0 30px rgba(139, 92, 246, 0.3);
             }
             
             .form-group {
-                margin-bottom: 20px;
+                margin-bottom: 25px;
             }
             
             .form-input {
                 width: 100%;
-                padding: 12px 16px;
+                padding: 16px 20px;
                 background: rgba(255, 255, 255, 0.1);
                 border: 1px solid var(--glass-border);
-                border-radius: 10px;
+                border-radius: 12px;
                 color: var(--text);
                 font-size: 1rem;
                 transition: all 0.3s ease;
+                backdrop-filter: blur(10px);
             }
             
             .form-input:focus {
                 outline: none;
                 border-color: var(--primary);
-                box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.3);
+                box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.3), var(--neon-glow);
+                background: rgba(255, 255, 255, 0.15);
             }
             
             .submit-btn {
                 width: 100%;
                 background: var(--gradient);
                 border: none;
-                padding: 14px;
-                border-radius: 10px;
+                padding: 16px;
+                border-radius: 12px;
                 color: white;
-                font-weight: 600;
+                font-weight: 700;
                 cursor: pointer;
                 transition: all 0.3s ease;
+                box-shadow: var(--glass-shadow);
+                position: relative;
+                overflow: hidden;
             }
             
             .submit-btn:hover {
                 transform: translateY(-2px);
-                box-shadow: 0 8px 20px rgba(139, 92, 246, 0.4);
+                box-shadow: 0 8px 25px rgba(139, 92, 246, 0.5), var(--neon-glow);
             }
             
             .switch-btn {
@@ -574,13 +632,47 @@ app.get('/', (req, res) => {
                 background: none;
                 border: none;
                 cursor: pointer;
-                font-weight: 500;
-                margin-top: 15px;
+                font-weight: 600;
+                margin-top: 20px;
+                padding: 10px;
+                border-radius: 8px;
+                transition: all 0.3s ease;
+            }
+            
+            .switch-btn:hover {
+                background: rgba(139, 92, 246, 0.1);
+            }
+            
+            @keyframes float {
+                0%, 100% { transform: translateY(0px) rotate(0deg); }
+                50% { transform: translateY(-20px) rotate(180deg); }
+            }
+            
+            @keyframes titleGlow {
+                0% { text-shadow: 0 0 50px rgba(139, 92, 246, 0.3); }
+                100% { text-shadow: 0 0 70px rgba(139, 92, 246, 0.5), 0 0 100px rgba(139, 92, 246, 0.2); }
+            }
+            
+            @keyframes modalAppear {
+                0% { opacity: 0; backdrop-filter: blur(0px); }
+                100% { opacity: 1; backdrop-filter: blur(15px); }
+            }
+            
+            @keyframes modalContentAppear {
+                0% { opacity: 0; transform: scale(0.8) translateY(20px); }
+                100% { opacity: 1; transform: scale(1) translateY(0); }
+            }
+            
+            @media (max-width: 768px) {
+                .hero-title { font-size: 3rem; }
+                .hero-subtitle { font-size: 1.1rem; padding: 20px; }
+                .create-btn { padding: 18px 35px; font-size: 1.1rem; }
             }
         </style>
     </head>
     <body>
         <div class="liquid-glass-effect"></div>
+        <div class="floating-particles" id="particles"></div>
         
         <div class="header">
             <button class="login-btn" onclick="showLoginModal()">Вход+</button>
@@ -636,14 +728,63 @@ app.get('/', (req, res) => {
         </div>
         
         <script>
+            // Create floating particles
+            function createParticles() {
+                const container = document.getElementById('particles');
+                for (let i = 0; i < 15; i++) {
+                    const particle = document.createElement('div');
+                    particle.className = 'particle';
+                    
+                    const size = Math.random() * 100 + 20;
+                    const posX = Math.random() * 100;
+                    const posY = Math.random() * 100;
+                    const delay = Math.random() * 5;
+                    const duration = Math.random() * 4 + 4;
+                    
+                    particle.style.width = size + 'px';
+                    particle.style.height = size + 'px';
+                    particle.style.left = posX + '%';
+                    particle.style.top = posY + '%';
+                    particle.style.animationDelay = delay + 's';
+                    particle.style.animationDuration = duration + 's';
+                    particle.style.background = \`radial-gradient(circle, rgba(139, 92, 246, 0.3), transparent)\`;
+                    
+                    container.appendChild(particle);
+                }
+            }
+            
+            // Play gentle sound
+            function playGentleSound() {
+                try {
+                    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    const oscillator = audioContext.createOscillator();
+                    const gainNode = audioContext.createGain();
+                    
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioContext.destination);
+                    
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(523.25, audioContext.currentTime); // C5
+                    gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 1);
+                    
+                    oscillator.start(audioContext.currentTime);
+                    oscillator.stop(audioContext.currentTime + 1);
+                } catch (e) {
+                    console.log('Audio not supported');
+                }
+            }
+            
             function showLoginModal() {
                 document.getElementById('loginModal').style.display = 'flex';
                 document.getElementById('registerModal').style.display = 'none';
+                playGentleSound();
             }
             
             function showRegisterModal() {
                 document.getElementById('registerModal').style.display = 'flex';
                 document.getElementById('loginModal').style.display = 'none';
+                playGentleSound();
             }
             
             function hideModals() {
@@ -681,6 +822,7 @@ app.get('/', (req, res) => {
                     
                     if (result.success) {
                         localStorage.setItem('token', result.token);
+                        playGentleSound();
                         if (result.user.is_admin) {
                             window.location.href = '/admin';
                         } else {
@@ -714,6 +856,7 @@ app.get('/', (req, res) => {
                     
                     if (result.success) {
                         alert('Аккаунт создан! Теперь войдите.');
+                        playGentleSound();
                         showLoginModal();
                     } else {
                         alert(result.error);
@@ -726,7 +869,6 @@ app.get('/', (req, res) => {
             // Check if user is already logged in
             const token = localStorage.getItem('token');
             if (token) {
-                // Verify token and redirect
                 try {
                     const payload = JSON.parse(atob(token.split('.')[1]));
                     if (payload.is_admin) {
@@ -738,16 +880,27 @@ app.get('/', (req, res) => {
                     localStorage.removeItem('token');
                 }
             }
+            
+            // Initialize
+            document.addEventListener('DOMContentLoaded', function() {
+                createParticles();
+                playGentleSound();
+                
+                // Add hover sound to buttons
+                const buttons = document.querySelectorAll('button');
+                buttons.forEach(button => {
+                    button.addEventListener('mouseenter', function() {
+                        playGentleSound();
+                    });
+                });
+            });
         </script>
     </body>
     </html>
     `);
 });
 
-// Добавь также маршруты /dashboard и /admin как в предыдущем коде...
-// [Здесь должен быть тот же код для /dashboard и /admin что и в предыдущем сообщении]
-
-// Запуск сервера
+// Dashboard Route
 app.get('/dashboard', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -759,82 +912,394 @@ app.get('/dashboard', (req, res) => {
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            
             :root {
-                --primary: #8B5CF6; --secondary: #7C3AED; --accent: #A78BFA;
-                --background: #0F0F23; --surface: rgba(255, 255, 255, 0.05);
-                --text: #E2E8F0; --text-secondary: #94A3B8;
+                --primary: #8B5CF6;
+                --secondary: #7C3AED;
+                --accent: #A78BFA;
+                --background: #0F0F23;
+                --surface: rgba(255, 255, 255, 0.05);
+                --text: #E2E8F0;
+                --text-secondary: #94A3B8;
                 --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
-                --glass: rgba(255, 255, 255, 0.1); --glass-border: rgba(255, 255, 255, 0.2);
-                --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+                --gradient-glow: linear-gradient(135deg, #8B5CF6, #7C3AED, #A78BFA);
+                --glass: rgba(255, 255, 255, 0.08);
+                --glass-border: rgba(255, 255, 255, 0.15);
+                --glass-shadow: 0 8px 32px rgba(139, 92, 246, 0.15);
+                --neon-glow: 0 0 20px rgba(139, 92, 246, 0.3);
             }
-            body { font-family: 'Inter', sans-serif; background: var(--background); color: var(--text); min-height: 100vh; }
+            
+            body {
+                font-family: 'Inter', sans-serif;
+                background: var(--background);
+                color: var(--text);
+                min-height: 100vh;
+            }
+            
             .liquid-glass-effect {
-                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-                background: radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
-                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.15) 0%, transparent 50%);
-                backdrop-filter: blur(40px); -webkit-backdrop-filter: blur(40px); z-index: -2;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: 
+                    radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.2) 0%, transparent 50%),
+                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.2) 0%, transparent 50%),
+                    radial-gradient(circle at 40% 80%, rgba(167, 139, 250, 0.15) 0%, transparent 50%);
+                backdrop-filter: blur(60px) saturate(180%);
+                -webkit-backdrop-filter: blur(60px) saturate(180%);
+                z-index: -2;
             }
-            .header { padding: 20px; display: flex; justify-content: space-between; align-items: center;
-                border-bottom: 1px solid var(--glass-border); background: var(--glass); backdrop-filter: blur(20px); }
-            .logo { font-size: 1.5rem; font-weight: 700; background: var(--gradient); -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent; }
-            .user-menu { display: flex; align-items: center; gap: 15px; }
-            .logout-btn { background: none; border: 1px solid var(--glass-border); color: var(--text);
-                padding: 8px 16px; border-radius: 8px; cursor: pointer; transition: all 0.3s ease; }
-            .logout-btn:hover { background: rgba(255, 255, 255, 0.1); }
-            .container { max-width: 1200px; margin: 0 auto; padding: 40px 20px; }
-            .accounts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 40px; }
-            .account-card { background: var(--glass); backdrop-filter: blur(20px); border: 1px solid var(--glass-border);
-                border-radius: 16px; padding: 24px; transition: all 0.3s ease; position: relative; overflow: hidden; }
-            .account-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--gradient); }
-            .account-card:hover { transform: translateY(-5px); box-shadow: var(--glass-shadow); }
-            .account-name { font-size: 1.3rem; font-weight: 600; margin-bottom: 10px; background: var(--gradient);
-                -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-            .account-info { margin-bottom: 15px; }
-            .info-item { margin-bottom: 5px; font-size: 0.9rem; color: var(--text-secondary); }
-            .password-hover { position: relative; cursor: help; }
-            .password-hover:hover::after { content: attr(data-password); position: absolute; bottom: 100%; left: 0;
-                background: var(--background); border: 1px solid var(--glass-border); padding: 5px 10px;
-                border-radius: 6px; font-size: 0.8rem; white-space: nowrap; z-index: 10; }
-            .farm-controls { display: flex; gap: 10px; margin-top: 15px; }
-            .farm-btn { flex: 1; padding: 8px 12px; border: none; border-radius: 8px; font-weight: 500;
-                cursor: pointer; transition: all 0.3s ease; font-size: 0.9rem; }
-            .farm-btn.start { background: var(--primary); color: white; }
-            .farm-btn.stop { background: #EF4444; color: white; }
-            .farm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-            .farm-status { margin-top: 10px; padding: 8px; border-radius: 6px; font-size: 0.8rem; text-align: center; }
-            .status-farming { background: rgba(16, 185, 129, 0.2); color: #10B981; }
-            .status-stopped { background: rgba(107, 114, 128, 0.2); color: var(--text-secondary); }
-            .add-account-card { background: var(--glass); backdrop-filter: blur(20px); border: 2px dashed var(--glass-border);
-                border-radius: 16px; padding: 40px 24px; display: flex; flex-direction: column; align-items: center;
-                justify-content: center; cursor: pointer; transition: all 0.3s ease; text-align: center; }
-            .add-account-card:hover { border-color: var(--primary); transform: translateY(-5px); }
-            .add-icon { font-size: 2rem; color: var(--primary); margin-bottom: 10px; }
-            .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-                background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(10px); z-index: 2000; align-items: center; justify-content: center; }
-            .modal-content { background: var(--glass); backdrop-filter: blur(20px); border: 1px solid var(--glass-border);
-                border-radius: 20px; padding: 30px; max-width: 500px; width: 90%; max-height: 90vh;
-                overflow-y: auto; box-shadow: var(--glass-shadow); }
-            .modal-title { font-size: 1.5rem; font-weight: 600; margin-bottom: 20px; text-align: center;
-                background: var(--gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-            .form-group { margin-bottom: 15px; }
-            .form-label { display: block; margin-bottom: 5px; font-weight: 500; color: var(--text-secondary); }
-            .form-input, .form-select { width: 100%; padding: 10px 12px; background: rgba(255, 255, 255, 0.1);
-                border: 1px solid var(--glass-border); border-radius: 8px; color: var(--text); font-size: 0.9rem;
-                transition: all 0.3s ease; }
-            .form-input:focus, .form-select:focus { outline: none; border-color: var(--primary);
-                box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.3); }
-            .form-hint { font-size: 0.8rem; color: var(--text-secondary); margin-top: 5px; }
-            .submit-btn { width: 100%; background: var(--gradient); border: none; padding: 12px; border-radius: 8px;
-                color: white; font-weight: 600; cursor: pointer; transition: all 0.3s ease; margin-top: 10px; }
-            .submit-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(139, 92, 246, 0.4); }
-            .close-btn { position: absolute; top: 15px; right: 15px; background: none; border: none;
-                color: var(--text-secondary); font-size: 1.2rem; cursor: pointer; }
+            
+            .header {
+                padding: 20px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-bottom: 1px solid var(--glass-border);
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+            }
+            
+            .logo {
+                font-size: 1.5rem;
+                font-weight: 700;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            
+            .user-menu {
+                display: flex;
+                align-items: center;
+                gap: 15px;
+            }
+            
+            .logout-btn {
+                background: none;
+                border: 1px solid var(--glass-border);
+                color: var(--text);
+                padding: 8px 16px;
+                border-radius: 8px;
+                cursor: pointer;
+                transition: all 0.3s ease;
+            }
+            
+            .logout-btn:hover {
+                background: rgba(255, 255, 255, 0.1);
+            }
+            
+            .container {
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 40px 20px;
+            }
+            
+            .accounts-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+                gap: 25px;
+                margin-bottom: 40px;
+            }
+            
+            .account-card {
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+                border: 1px solid var(--glass-border);
+                border-radius: 20px;
+                padding: 30px;
+                transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+                position: relative;
+                overflow: hidden;
+                box-shadow: var(--glass-shadow);
+            }
+            
+            .account-card::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 3px;
+                background: var(--gradient);
+            }
+            
+            .account-card:hover {
+                transform: translateY(-8px);
+                box-shadow: var(--glass-shadow), var(--neon-glow);
+                border-color: rgba(139, 92, 246, 0.3);
+            }
+            
+            .account-name {
+                font-size: 1.4rem;
+                font-weight: 700;
+                margin-bottom: 15px;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            
+            .account-info {
+                margin-bottom: 20px;
+            }
+            
+            .info-item {
+                margin-bottom: 8px;
+                font-size: 0.95rem;
+                color: var(--text-secondary);
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            
+            .password-hover {
+                position: relative;
+                cursor: help;
+                padding: 4px 8px;
+                border-radius: 6px;
+                transition: all 0.3s ease;
+            }
+            
+            .password-hover:hover {
+                background: rgba(255, 255, 255, 0.1);
+            }
+            
+            .password-hover:hover::after {
+                content: attr(data-password);
+                position: absolute;
+                bottom: 100%;
+                left: 0;
+                background: var(--background);
+                border: 1px solid var(--glass-border);
+                padding: 8px 12px;
+                border-radius: 8px;
+                font-size: 0.8rem;
+                white-space: nowrap;
+                z-index: 10;
+                backdrop-filter: blur(10px);
+            }
+            
+            .farm-controls {
+                display: flex;
+                gap: 12px;
+                margin-top: 20px;
+            }
+            
+            .farm-btn {
+                flex: 1;
+                padding: 12px 16px;
+                border: none;
+                border-radius: 12px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                font-size: 0.95rem;
+                position: relative;
+                overflow: hidden;
+            }
+            
+            .farm-btn.start {
+                background: var(--primary);
+                color: white;
+                box-shadow: 0 4px 15px rgba(139, 92, 246, 0.3);
+            }
+            
+            .farm-btn.stop {
+                background: #EF4444;
+                color: white;
+                box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
+            }
+            
+            .farm-btn:disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+                transform: none !important;
+            }
+            
+            .farm-btn:not(:disabled):hover {
+                transform: translateY(-2px);
+                box-shadow: 0 6px 20px rgba(139, 92, 246, 0.4);
+            }
+            
+            .farm-status {
+                margin-top: 15px;
+                padding: 12px;
+                border-radius: 10px;
+                font-size: 0.85rem;
+                text-align: center;
+                backdrop-filter: blur(10px);
+            }
+            
+            .status-farming {
+                background: rgba(16, 185, 129, 0.2);
+                color: #10B981;
+                border: 1px solid rgba(16, 185, 129, 0.3);
+            }
+            
+            .status-stopped {
+                background: rgba(107, 114, 128, 0.2);
+                color: var(--text-secondary);
+                border: 1px solid var(--glass-border);
+            }
+            
+            .add-account-card {
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+                border: 2px dashed var(--glass-border);
+                border-radius: 20px;
+                padding: 50px 30px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+                text-align: center;
+            }
+            
+            .add-account-card:hover {
+                border-color: var(--primary);
+                transform: translateY(-8px);
+                box-shadow: var(--glass-shadow), var(--neon-glow);
+            }
+            
+            .add-icon {
+                font-size: 3rem;
+                color: var(--primary);
+                margin-bottom: 15px;
+                transition: all 0.3s ease;
+            }
+            
+            .add-account-card:hover .add-icon {
+                transform: scale(1.1);
+            }
+            
+            /* Modal styles */
+            .modal {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.8);
+                backdrop-filter: blur(15px);
+                z-index: 2000;
+                align-items: center;
+                justify-content: center;
+            }
+            
+            .modal-content {
+                background: var(--glass);
+                backdrop-filter: blur(30px);
+                border: 1px solid var(--glass-border);
+                border-radius: 25px;
+                padding: 35px;
+                max-width: 500px;
+                width: 90%;
+                max-height: 90vh;
+                overflow-y: auto;
+                box-shadow: var(--glass-shadow), var(--neon-glow);
+            }
+            
+            .modal-title {
+                font-size: 1.6rem;
+                font-weight: 700;
+                margin-bottom: 25px;
+                text-align: center;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            
+            .form-group {
+                margin-bottom: 20px;
+            }
+            
+            .form-label {
+                display: block;
+                margin-bottom: 8px;
+                font-weight: 600;
+                color: var(--text-secondary);
+            }
+            
+            .form-input, .form-select {
+                width: 100%;
+                padding: 14px 16px;
+                background: rgba(255, 255, 255, 0.1);
+                border: 1px solid var(--glass-border);
+                border-radius: 12px;
+                color: var(--text);
+                font-size: 0.95rem;
+                transition: all 0.3s ease;
+                backdrop-filter: blur(10px);
+            }
+            
+            .form-input:focus, .form-select:focus {
+                outline: none;
+                border-color: var(--primary);
+                box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.3), var(--neon-glow);
+                background: rgba(255, 255, 255, 0.15);
+            }
+            
+            .form-hint {
+                font-size: 0.8rem;
+                color: var(--text-secondary);
+                margin-top: 6px;
+            }
+            
+            .submit-btn {
+                width: 100%;
+                background: var(--gradient);
+                border: none;
+                padding: 16px;
+                border-radius: 12px;
+                color: white;
+                font-weight: 700;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                box-shadow: var(--glass-shadow);
+                margin-top: 15px;
+            }
+            
+            .submit-btn:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 8px 25px rgba(139, 92, 246, 0.5), var(--neon-glow);
+            }
+            
+            .close-btn {
+                position: absolute;
+                top: 20px;
+                right: 20px;
+                background: none;
+                border: none;
+                color: var(--text-secondary);
+                font-size: 1.5rem;
+                cursor: pointer;
+                transition: all 0.3s ease;
+            }
+            
+            .close-btn:hover {
+                color: var(--text);
+                transform: scale(1.1);
+            }
+            
+            .loading {
+                text-align: center;
+                padding: 40px;
+                color: var(--text-secondary);
+                font-size: 1.1rem;
+            }
         </style>
     </head>
     <body>
         <div class="liquid-glass-effect"></div>
+        
         <div class="header">
             <div class="logo">Steam Farm</div>
             <div class="user-menu">
@@ -842,11 +1307,14 @@ app.get('/dashboard', (req, res) => {
                 <button class="logout-btn" onclick="logout()">Выйти</button>
             </div>
         </div>
+        
         <div class="container">
             <div class="accounts-grid" id="accountsGrid">
                 <div class="loading">Загрузка аккаунтов...</div>
             </div>
         </div>
+        
+        <!-- Add Account Modal -->
         <div class="modal" id="addAccountModal">
             <div class="modal-content">
                 <button class="close-btn" onclick="hideAddAccountModal()">×</button>
@@ -856,19 +1324,23 @@ app.get('/dashboard', (req, res) => {
                         <label class="form-label">Имя аккаунта</label>
                         <input type="text" class="form-input" name="name" placeholder="Мой основной аккаунт" required>
                     </div>
+                    
                     <div class="form-group">
                         <label class="form-label">Логин Steam</label>
                         <input type="text" class="form-input" name="username" required>
                     </div>
+                    
                     <div class="form-group">
                         <label class="form-label">Пароль Steam</label>
                         <input type="password" class="form-input" name="password" required>
                     </div>
+                    
                     <div class="form-group">
                         <label class="form-label">Айди игр для фарма</label>
                         <input type="text" class="form-input" name="games" value="730" required>
                         <div class="form-hint">Через запятую. Максимум 32 айди. CS2 = 730</div>
                     </div>
+                    
                     <div class="form-group">
                         <label class="form-label">Режим скрытности</label>
                         <select class="form-select" name="stealth_mode">
@@ -876,6 +1348,7 @@ app.get('/dashboard', (req, res) => {
                             <option value="true">Не в сети (Status: 7)</option>
                         </select>
                     </div>
+                    
                     <div class="form-group">
                         <label class="form-label">Время фарма</label>
                         <select class="form-select" name="farm_days">
@@ -885,38 +1358,92 @@ app.get('/dashboard', (req, res) => {
                             <option value="0" selected>Навсегда</option>
                         </select>
                     </div>
+                    
                     <button type="submit" class="submit-btn">Добавить аккаунт</button>
                 </form>
             </div>
         </div>
+        
         <script>
+            // Play gentle sound
+            function playGentleSound() {
+                try {
+                    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    const oscillator = audioContext.createOscillator();
+                    const gainNode = audioContext.createGain();
+                    
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioContext.destination);
+                    
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(523.25, audioContext.currentTime);
+                    gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 1);
+                    
+                    oscillator.start(audioContext.currentTime);
+                    oscillator.stop(audioContext.currentTime + 1);
+                } catch (e) {
+                    console.log('Audio not supported');
+                }
+            }
+            
             const token = localStorage.getItem('token');
-            if (!token) window.location.href = '/';
+            if (!token) {
+                window.location.href = '/';
+            }
+            
+            let currentUser = null;
             try {
-                const payload = JSON.parse(atob(token.split('.')[1]));
-                document.getElementById('usernameDisplay').textContent = payload.username;
-            } catch (e) { logout(); }
+                currentUser = JSON.parse(atob(token.split('.')[1]));
+                document.getElementById('usernameDisplay').textContent = currentUser.username;
+            } catch (e) {
+                logout();
+            }
+            
             async function loadAccounts() {
                 try {
-                    const response = await fetch('/api/accounts', { headers: { 'Authorization': 'Bearer ' + token } });
+                    const response = await fetch('/api/accounts', {
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    
                     const data = await response.json();
                     displayAccounts(data.accounts);
-                } catch (error) { console.error('Error loading accounts:', error); }
+                } catch (error) {
+                    console.error('Error loading accounts:', error);
+                    document.getElementById('accountsGrid').innerHTML = '<div class="loading">Ошибка загрузки аккаунтов</div>';
+                }
             }
+            
             function displayAccounts(accounts) {
                 const grid = document.getElementById('accountsGrid');
                 grid.innerHTML = '';
+                
                 accounts.forEach(account => {
                     const accountCard = document.createElement('div');
                     accountCard.className = 'account-card';
                     accountCard.innerHTML = \`
                         <div class="account-name">\${account.name}</div>
                         <div class="account-info">
-                            <div class="info-item">Логин: \${account.username}</div>
-                            <div class="info-item password-hover" data-password="\${account.password}">Пароль: ••••••••</div>
-                            <div class="info-item">Игры: \${account.games}</div>
-                            <div class="info-item">Режим: \${account.stealth_mode ? 'Не в сети' : 'В сети'}</div>
-                            <div class="info-item">Фарм: \${getFarmDaysText(account.farm_days)}</div>
+                            <div class="info-item">
+                                <i class="fas fa-user"></i>
+                                Логин: \${account.username}
+                            </div>
+                            <div class="info-item password-hover" data-password="\${account.password}">
+                                <i class="fas fa-lock"></i>
+                                Пароль: ••••••••
+                            </div>
+                            <div class="info-item">
+                                <i class="fas fa-gamepad"></i>
+                                Игры: \${account.games}
+                            </div>
+                            <div class="info-item">
+                                <i class="fas fa-eye\${account.stealth_mode ? '-slash' : ''}"></i>
+                                Режим: \${account.stealth_mode ? 'Не в сети' : 'В сети'}
+                            </div>
+                            <div class="info-item">
+                                <i class="fas fa-clock"></i>
+                                Фарм: \${getFarmDaysText(account.farm_days)}
+                            </div>
                         </div>
                         <div class="farm-controls">
                             <button class="farm-btn start" onclick="startFarming(\${account.id})" \${account.isFarming ? 'disabled' : ''}>
@@ -927,72 +1454,154 @@ app.get('/dashboard', (req, res) => {
                             </button>
                         </div>
                         <div class="farm-status \${account.isFarming ? 'status-farming' : 'status-stopped'}">
-                            \${account.isFarming ? \`Фарм активен • \${Math.floor(account.farmingTime / 60)}ч \${account.farmingTime % 60}м\` : 'Фарм остановлен'}
+                            \${account.isFarming ? 
+                                \`🎮 Фарм активен • \${Math.floor(account.farmingTime / 60)}ч \${account.farmingTime % 60}м\` : 
+                                '💤 Фарм остановлен'
+                            }
                         </div>
                     \`;
                     grid.appendChild(accountCard);
                 });
+                
+                // Add "Add Account" card if less than 5 accounts
                 if (accounts.length < 5) {
                     const addCard = document.createElement('div');
                     addCard.className = 'account-card add-account-card';
                     addCard.onclick = showAddAccountModal;
                     addCard.innerHTML = \`
                         <div class="add-icon">+</div>
-                        <div>Добавить аккаунт</div>
-                        <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 5px;">Осталось слотов: \${5 - accounts.length}</div>
+                        <div style="font-size: 1.2rem; font-weight: 600; margin-bottom: 8px;">Добавить аккаунт</div>
+                        <div style="font-size: 0.9rem; color: var(--text-secondary);">
+                            Осталось слотов: \${5 - accounts.length}
+                        </div>
                     \`;
                     grid.appendChild(addCard);
                 }
+                
+                // Add hover effects to all buttons
+                const buttons = document.querySelectorAll('button');
+                buttons.forEach(button => {
+                    button.addEventListener('mouseenter', playGentleSound);
+                });
             }
+            
             function getFarmDaysText(days) {
                 if (days === 0) return 'Навсегда';
                 if (days === 1) return '1 день';
                 return \`\${days} дней\`;
             }
-            function showAddAccountModal() { document.getElementById('addAccountModal').style.display = 'flex'; }
-            function hideAddAccountModal() { document.getElementById('addAccountModal').style.display = 'none'; }
+            
+            function showAddAccountModal() {
+                document.getElementById('addAccountModal').style.display = 'flex';
+                playGentleSound();
+            }
+            
+            function hideAddAccountModal() {
+                document.getElementById('addAccountModal').style.display = 'none';
+            }
+            
             async function startFarming(accountId) {
                 try {
-                    const response = await fetch(\`/api/farm/start/\${accountId}\`, { method: 'POST', headers: { 'Authorization': 'Bearer ' + token } });
+                    const response = await fetch(\`/api/farm/start/\${accountId}\`, {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    
                     const result = await response.json();
-                    if (result.success) loadAccounts(); else alert(result.error);
-                } catch (error) { alert('Ошибка запуска фарма'); }
+                    if (result.success) {
+                        playGentleSound();
+                        loadAccounts();
+                    } else {
+                        alert(result.error);
+                    }
+                } catch (error) {
+                    alert('Ошибка запуска фарма');
+                }
             }
+            
             async function stopFarming(accountId) {
                 try {
-                    const response = await fetch(\`/api/farm/stop/\${accountId}\`, { method: 'POST', headers: { 'Authorization': 'Bearer ' + token } });
+                    const response = await fetch(\`/api/farm/stop/\${accountId}\`, {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    
                     const result = await response.json();
-                    if (result.success) loadAccounts(); else alert(result.error);
-                } catch (error) { alert('Ошибка остановки фарма'); }
+                    if (result.success) {
+                        playGentleSound();
+                        loadAccounts();
+                    } else {
+                        alert(result.error);
+                    }
+                } catch (error) {
+                    alert('Ошибка остановки фарма');
+                }
             }
+            
             document.getElementById('addAccountForm').addEventListener('submit', async function(e) {
                 e.preventDefault();
                 const formData = new FormData(this);
                 const data = {
-                    name: formData.get('name'), username: formData.get('username'), password: formData.get('password'),
-                    games: formData.get('games'), stealth_mode: formData.get('stealth_mode') === 'true',
+                    name: formData.get('name'),
+                    username: formData.get('username'),
+                    password: formData.get('password'),
+                    games: formData.get('games'),
+                    stealth_mode: formData.get('stealth_mode') === 'true',
                     farm_days: parseInt(formData.get('farm_days'))
                 };
+                
                 try {
                     const response = await fetch('/api/accounts', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': 'Bearer ' + token
+                        },
                         body: JSON.stringify(data)
                     });
+                    
                     const result = await response.json();
-                    if (result.success) { hideAddAccountModal(); this.reset(); loadAccounts(); } else { alert(result.error); }
-                } catch (error) { alert('Ошибка создания аккаунта'); }
+                    
+                    if (result.success) {
+                        playGentleSound();
+                        hideAddAccountModal();
+                        this.reset();
+                        loadAccounts();
+                    } else {
+                        alert(result.error);
+                    }
+                } catch (error) {
+                    alert('Ошибка создания аккаунта');
+                }
             });
-            function logout() { localStorage.removeItem('token'); window.location.href = '/'; }
+            
+            function logout() {
+                localStorage.removeItem('token');
+                window.location.href = '/';
+            }
+            
+            // Close modal on outside click
             document.addEventListener('click', function(event) {
-                if (event.target === document.getElementById('addAccountModal')) hideAddAccountModal();
+                if (event.target === document.getElementById('addAccountModal')) {
+                    hideAddAccountModal();
+                }
             });
-            loadAccounts(); setInterval(loadAccounts, 30000);
+            
+            // Load accounts on page load
+            document.addEventListener('DOMContentLoaded', function() {
+                loadAccounts();
+                playGentleSound();
+                
+                // Refresh accounts every 30 seconds
+                setInterval(loadAccounts, 30000);
+            });
         </script>
     </body>
     </html>
     `);
 });
 
+// Admin Route with Tabs
 app.get('/admin', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -1004,51 +1613,320 @@ app.get('/admin', (req, res) => {
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            
             :root {
-                --primary: #8B5CF6; --secondary: #7C3AED; --accent: #A78BFA;
-                --background: #0F0F23; --surface: rgba(255, 255, 255, 0.05);
-                --text: #E2E8F0; --text-secondary: #94A3B8;
+                --primary: #8B5CF6;
+                --secondary: #7C3AED;
+                --accent: #A78BFA;
+                --background: #0F0F23;
+                --surface: rgba(255, 255, 255, 0.05);
+                --text: #E2E8F0;
+                --text-secondary: #94A3B8;
                 --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
-                --glass: rgba(255, 255, 255, 0.1); --glass-border: rgba(255, 255, 255, 0.2);
-                --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+                --gradient-glow: linear-gradient(135deg, #8B5CF6, #7C3AED, #A78BFA);
+                --glass: rgba(255, 255, 255, 0.08);
+                --glass-border: rgba(255, 255, 255, 0.15);
+                --glass-shadow: 0 8px 32px rgba(139, 92, 246, 0.15);
+                --neon-glow: 0 0 20px rgba(139, 92, 246, 0.3);
             }
-            body { font-family: 'Inter', sans-serif; background: var(--background); color: var(--text); min-height: 100vh; }
+            
+            body {
+                font-family: 'Inter', sans-serif;
+                background: var(--background);
+                color: var(--text);
+                min-height: 100vh;
+            }
+            
             .liquid-glass-effect {
-                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-                background: radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
-                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.15) 0%, transparent 50%);
-                backdrop-filter: blur(40px); -webkit-backdrop-filter: blur(40px); z-index: -2;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: 
+                    radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.2) 0%, transparent 50%),
+                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.2) 0%, transparent 50%),
+                    radial-gradient(circle at 40% 80%, rgba(167, 139, 250, 0.15) 0%, transparent 50%);
+                backdrop-filter: blur(60px) saturate(180%);
+                -webkit-backdrop-filter: blur(60px) saturate(180%);
+                z-index: -2;
             }
-            .header { padding: 20px; display: flex; justify-content: space-between; align-items: center;
-                border-bottom: 1px solid var(--glass-border); background: var(--glass); backdrop-filter: blur(20px); }
-            .logo { font-size: 1.5rem; font-weight: 700; background: var(--gradient); -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent; }
-            .user-menu { display: flex; align-items: center; gap: 15px; }
-            .logout-btn { background: none; border: 1px solid var(--glass-border); color: var(--text);
-                padding: 8px 16px; border-radius: 8px; cursor: pointer; transition: all 0.3s ease; }
-            .logout-btn:hover { background: rgba(255, 255, 255, 0.1); }
-            .container { max-width: 1200px; margin: 0 auto; padding: 40px 20px; }
-            .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 40px; }
-            .stat-card { background: var(--glass); backdrop-filter: blur(20px); border: 1px solid var(--glass-border);
-                border-radius: 16px; padding: 24px; text-align: center; position: relative; overflow: hidden; }
-            .stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--gradient); }
-            .stat-value { font-size: 2.5rem; font-weight: 700; background: var(--gradient); -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent; margin-bottom: 10px; }
-            .stat-label { color: var(--text-secondary); font-size: 0.9rem; }
-            .users-table { background: var(--glass); backdrop-filter: blur(20px); border: 1px solid var(--glass-border); border-radius: 16px; overflow: hidden; }
-            .table-header { padding: 20px; border-bottom: 1px solid var(--glass-border); font-weight: 600;
-                background: var(--gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-            .table-row { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; padding: 15px 20px;
-                border-bottom: 1px solid var(--glass-border); align-items: center; }
-            .table-row:last-child { border-bottom: none; }
-            .table-row:hover { background: rgba(255, 255, 255, 0.05); }
-            .admin-badge { background: var(--gradient); color: white; padding: 4px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: 600; }
-            .loading { text-align: center; padding: 40px; color: var(--text-secondary); }
+            
+            .header {
+                padding: 20px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-bottom: 1px solid var(--glass-border);
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+            }
+            
+            .logo {
+                font-size: 1.5rem;
+                font-weight: 700;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            
+            .user-menu {
+                display: flex;
+                align-items: center;
+                gap: 15px;
+            }
+            
+            .logout-btn {
+                background: none;
+                border: 1px solid var(--glass-border);
+                color: var(--text);
+                padding: 8px 16px;
+                border-radius: 8px;
+                cursor: pointer;
+                transition: all 0.3s ease;
+            }
+            
+            .logout-btn:hover {
+                background: rgba(255, 255, 255, 0.1);
+            }
+            
+            .container {
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 40px 20px;
+            }
+            
+            /* Tabs */
+            .tabs {
+                display: flex;
+                gap: 10px;
+                margin-bottom: 30px;
+                border-bottom: 1px solid var(--glass-border);
+                padding-bottom: 5px;
+            }
+            
+            .tab {
+                background: none;
+                border: none;
+                color: var(--text-secondary);
+                padding: 15px 30px;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                border-bottom: 3px solid transparent;
+                font-weight: 600;
+                border-radius: 8px 8px 0 0;
+            }
+            
+            .tab.active {
+                color: var(--primary);
+                border-bottom-color: var(--primary);
+                background: rgba(139, 92, 246, 0.1);
+            }
+            
+            .tab:hover {
+                color: var(--text);
+                background: rgba(255, 255, 255, 0.05);
+            }
+            
+            .tab-content {
+                display: none;
+            }
+            
+            .tab-content.active {
+                display: block;
+                animation: fadeIn 0.5s ease-in-out;
+            }
+            
+            /* Stats */
+            .stats-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+                gap: 25px;
+                margin-bottom: 40px;
+            }
+            
+            .stat-card {
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+                border: 1px solid var(--glass-border);
+                border-radius: 20px;
+                padding: 30px;
+                text-align: center;
+                position: relative;
+                overflow: hidden;
+                transition: all 0.3s ease;
+                box-shadow: var(--glass-shadow);
+            }
+            
+            .stat-card:hover {
+                transform: translateY(-5px);
+                box-shadow: var(--glass-shadow), var(--neon-glow);
+            }
+            
+            .stat-card::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 3px;
+                background: var(--gradient);
+            }
+            
+            .stat-value {
+                font-size: 3rem;
+                font-weight: 800;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                margin-bottom: 10px;
+                line-height: 1;
+            }
+            
+            .stat-label {
+                color: var(--text-secondary);
+                font-size: 1rem;
+                font-weight: 600;
+            }
+            
+            /* Tables */
+            .users-table {
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+                border: 1px solid var(--glass-border);
+                border-radius: 20px;
+                overflow: hidden;
+                box-shadow: var(--glass-shadow);
+            }
+            
+            .table-header {
+                padding: 25px;
+                border-bottom: 1px solid var(--glass-border);
+                font-weight: 700;
+                font-size: 1.2rem;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            }
+            
+            .table-row {
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr 1fr;
+                padding: 20px 25px;
+                border-bottom: 1px solid var(--glass-border);
+                align-items: center;
+                transition: all 0.3s ease;
+            }
+            
+            .table-row:last-child {
+                border-bottom: none;
+            }
+            
+            .table-row:hover {
+                background: rgba(255, 255, 255, 0.05);
+            }
+            
+            .admin-badge {
+                background: var(--gradient);
+                color: white;
+                padding: 6px 12px;
+                border-radius: 8px;
+                font-size: 0.8rem;
+                font-weight: 700;
+            }
+            
+            /* Profile */
+            .profile-card {
+                background: var(--glass);
+                backdrop-filter: blur(20px);
+                border: 1px solid var(--glass-border);
+                border-radius: 20px;
+                padding: 35px;
+                margin-bottom: 30px;
+                box-shadow: var(--glass-shadow);
+            }
+            
+            .profile-header {
+                display: flex;
+                align-items: center;
+                gap: 25px;
+                margin-bottom: 30px;
+            }
+            
+            .profile-avatar {
+                width: 100px;
+                height: 100px;
+                border-radius: 50%;
+                background: var(--gradient);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 2.5rem;
+                color: white;
+                box-shadow: var(--neon-glow);
+            }
+            
+            .profile-info h2 {
+                font-size: 1.8rem;
+                margin-bottom: 8px;
+                background: var(--gradient);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                font-weight: 800;
+            }
+            
+            .profile-info p {
+                color: var(--text-secondary);
+                font-size: 1.1rem;
+            }
+            
+            .admin-accounts-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+                gap: 20px;
+            }
+            
+            .admin-account-card {
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid var(--glass-border);
+                border-radius: 15px;
+                padding: 25px;
+                transition: all 0.3s ease;
+            }
+            
+            .admin-account-card:hover {
+                transform: translateY(-3px);
+                box-shadow: var(--glass-shadow);
+            }
+            
+            .admin-account-name {
+                font-size: 1.2rem;
+                font-weight: 700;
+                margin-bottom: 15px;
+                color: var(--primary);
+            }
+            
+            .loading {
+                text-align: center;
+                padding: 50px;
+                color: var(--text-secondary);
+                font-size: 1.1rem;
+            }
+            
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateY(10px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
         </style>
     </head>
     <body>
         <div class="liquid-glass-effect"></div>
+        
         <div class="header">
             <div class="logo">Steam Farm • Админ</div>
             <div class="user-menu">
@@ -1056,40 +1934,183 @@ app.get('/admin', (req, res) => {
                 <button class="logout-btn" onclick="logout()">Выйти</button>
             </div>
         </div>
+        
         <div class="container">
-            <div class="stats-grid" id="statsGrid">
-                <div class="loading">Загрузка статистики...</div>
+            <div class="tabs">
+                <button class="tab active" onclick="switchTab('profile')">
+                    <i class="fas fa-user"></i> Профиль
+                </button>
+                <button class="tab" onclick="switchTab('admin')">
+                    <i class="fas fa-chart-bar"></i> Админ панель
+                </button>
             </div>
-            <div class="users-table">
-                <div class="table-header">Пользователи системы</div>
-                <div id="usersList">
-                    <div class="loading">Загрузка пользователей...</div>
+            
+            <div id="profile-tab" class="tab-content active">
+                <div class="profile-card">
+                    <div class="profile-header">
+                        <div class="profile-avatar">K</div>
+                        <div class="profile-info">
+                            <h2 id="adminUsername">kinel</h2>
+                            <p>Администратор системы</p>
+                        </div>
+                    </div>
+                    <h3 style="margin-bottom: 20px; color: var(--text-secondary);">Мои Steam аккаунты</h3>
+                    <div class="admin-accounts-grid" id="adminAccountsGrid">
+                        <div class="loading">Загрузка аккаунтов...</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="admin-tab" class="tab-content">
+                <div class="stats-grid" id="statsGrid">
+                    <div class="loading">Загрузка статистики...</div>
+                </div>
+                <div class="users-table">
+                    <div class="table-header">Пользователи системы</div>
+                    <div id="usersList">
+                        <div class="loading">Загрузка пользователей...</div>
+                    </div>
                 </div>
             </div>
         </div>
+        
         <script>
+            // Play gentle sound
+            function playGentleSound() {
+                try {
+                    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    const oscillator = audioContext.createOscillator();
+                    const gainNode = audioContext.createGain();
+                    
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioContext.destination);
+                    
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(523.25, audioContext.currentTime);
+                    gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 1);
+                    
+                    oscillator.start(audioContext.currentTime);
+                    oscillator.stop(audioContext.currentTime + 1);
+                } catch (e) {
+                    console.log('Audio not supported');
+                }
+            }
+            
             const token = localStorage.getItem('token');
-            if (!token) window.location.href = '/';
+            if (!token) {
+                window.location.href = '/';
+            }
+            
+            let currentUser = null;
+            
             try {
-                const payload = JSON.parse(atob(token.split('.')[1]));
-                document.getElementById('usernameDisplay').textContent = payload.username + ' (Admin)';
-                if (!payload.is_admin) window.location.href = '/dashboard';
-            } catch (e) { logout(); }
+                currentUser = JSON.parse(atob(token.split('.')[1]));
+                document.getElementById('usernameDisplay').textContent = currentUser.username + ' (Admin)';
+                document.getElementById('adminUsername').textContent = currentUser.username;
+                if (!currentUser.is_admin) {
+                    window.location.href = '/dashboard';
+                }
+            } catch (e) {
+                logout();
+            }
+            
+            function switchTab(tabName) {
+                document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+                
+                document.querySelector(\`[onclick="switchTab('\${tabName}')"]\`).classList.add('active');
+                document.getElementById(\`\${tabName}-tab\`).classList.add('active');
+                
+                playGentleSound();
+                
+                if (tabName === 'admin') {
+                    loadAdminStats();
+                } else if (tabName === 'profile') {
+                    loadAdminAccounts();
+                }
+            }
+            
+            async function loadAdminAccounts() {
+                try {
+                    const response = await fetch('/api/accounts', { headers: { 'Authorization': 'Bearer ' + token } });
+                    const data = await response.json();
+                    displayAdminAccounts(data.accounts);
+                } catch (error) {
+                    console.error('Error loading admin accounts:', error);
+                    document.getElementById('adminAccountsGrid').innerHTML = '<div class="loading">Ошибка загрузки аккаунтов</div>';
+                }
+            }
+            
+            function displayAdminAccounts(accounts) {
+                const grid = document.getElementById('adminAccountsGrid');
+                if (accounts.length === 0) {
+                    grid.innerHTML = '<div class="loading">Нет добавленных аккаунтов</div>';
+                    return;
+                }
+                
+                grid.innerHTML = accounts.map(account => \`
+                    <div class="admin-account-card">
+                        <div class="admin-account-name">\${account.name}</div>
+                        <div style="margin-bottom: 15px;">
+                            <div style="color: var(--text-secondary); margin-bottom: 5px;">Логин: \${account.username}</div>
+                            <div style="color: var(--text-secondary); margin-bottom: 5px;">Игры: \${account.games}</div>
+                            <div style="color: var(--text-secondary); margin-bottom: 5px;">Режим: \${account.stealth_mode ? 'Не в сети' : 'В сети'}</div>
+                        </div>
+                        <div class="farm-controls" style="display: flex; gap: 10px;">
+                            <button class="farm-btn start" onclick="startFarming(\${account.id})" \${account.isFarming ? 'disabled' : ''}
+                                style="padding: 10px 15px; border: none; border-radius: 8px; background: var(--primary); color: white; cursor: pointer;">
+                                <i class="fas fa-play"></i> Старт
+                            </button>
+                            <button class="farm-btn stop" onclick="stopFarming(\${account.id})" \${!account.isFarming ? 'disabled' : ''}
+                                style="padding: 10px 15px; border: none; border-radius: 8px; background: #EF4444; color: white; cursor: pointer;">
+                                <i class="fas fa-stop"></i> Стоп
+                            </button>
+                        </div>
+                        <div style="margin-top: 10px; padding: 8px; border-radius: 6px; font-size: 0.8rem; text-align: center; 
+                            background: \${account.isFarming ? 'rgba(16, 185, 129, 0.2)' : 'rgba(107, 114, 128, 0.2)'}; 
+                            color: \${account.isFarming ? '#10B981' : 'var(--text-secondary)'}">
+                            \${account.isFarming ? \`Фарм активен • \${Math.floor(account.farmingTime / 60)}ч \${account.farmingTime % 60}м\` : 'Фарм остановлен'}
+                        </div>
+                    </div>
+                \`).join('');
+                
+                // Add hover effects to buttons
+                const buttons = document.querySelectorAll('button');
+                buttons.forEach(button => {
+                    button.addEventListener('mouseenter', playGentleSound);
+                });
+            }
+            
             async function loadAdminStats() {
                 try {
                     const response = await fetch('/api/admin/stats', { headers: { 'Authorization': 'Bearer ' + token } });
                     const data = await response.json();
-                    displayStats(data); displayUsers(data.users);
-                } catch (error) { console.error('Error loading admin stats:', error); }
+                    displayStats(data);
+                    displayUsers(data.users);
+                } catch (error) {
+                    console.error('Error loading admin stats:', error);
+                }
             }
+            
             function displayStats(stats) {
                 const grid = document.getElementById('statsGrid');
                 grid.innerHTML = \`
-                    <div class="stat-card"><div class="stat-value">\${stats.totalUsers}</div><div class="stat-label">Всего пользователей</div></div>
-                    <div class="stat-card"><div class="stat-value">\${stats.totalAccounts}</div><div class="stat-label">Steam аккаунтов</div></div>
-                    <div class="stat-card"><div class="stat-value">\${stats.activeFarms}</div><div class="stat-label">Активных фармов</div></div>
+                    <div class="stat-card">
+                        <div class="stat-value">\${stats.totalUsers}</div>
+                        <div class="stat-label">Всего пользователей</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">\${stats.totalAccounts}</div>
+                        <div class="stat-label">Steam аккаунтов</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">\${stats.activeFarms}</div>
+                        <div class="stat-label">Активных фармов</div>
+                    </div>
                 \`;
             }
+            
             function displayUsers(users) {
                 const usersList = document.getElementById('usersList');
                 usersList.innerHTML = '';
@@ -1100,18 +2121,83 @@ app.get('/admin', (req, res) => {
                         <div>\${user.username}</div>
                         <div>\${new Date(user.created_at).toLocaleDateString('ru-RU')}</div>
                         <div>\${user.is_admin ? '<span class="admin-badge">Админ</span>' : 'Пользователь'}</div>
-                        <div>\${user.id === JSON.parse(atob(token.split('.')[1])).id ? 'Вы' : ''}</div>
+                        <div>\${user.id === currentUser.id ? '<span style="color: var(--primary);">Вы</span>' : ''}</div>
                     \`;
                     usersList.appendChild(row);
                 });
             }
-            function logout() { localStorage.removeItem('token'); window.location.href = '/'; }
-            loadAdminStats(); setInterval(loadAdminStats, 30000);
+            
+            async function startFarming(accountId) {
+                try {
+                    const response = await fetch(\`/api/farm/start/\${accountId}\`, {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    
+                    const result = await response.json();
+                    if (result.success) {
+                        playGentleSound();
+                        loadAdminAccounts();
+                    } else {
+                        alert(result.error);
+                    }
+                } catch (error) {
+                    alert('Ошибка запуска фарма');
+                }
+            }
+            
+            async function stopFarming(accountId) {
+                try {
+                    const response = await fetch(\`/api/farm/stop/\${accountId}\`, {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    });
+                    
+                    const result = await response.json();
+                    if (result.success) {
+                        playGentleSound();
+                        loadAdminAccounts();
+                    } else {
+                        alert(result.error);
+                    }
+                } catch (error) {
+                    alert('Ошибка остановки фарма');
+                }
+            }
+            
+            function logout() {
+                localStorage.removeItem('token');
+                window.location.href = '/';
+            }
+            
+            // Initialize
+            document.addEventListener('DOMContentLoaded', function() {
+                playGentleSound();
+                loadAdminAccounts();
+                
+                // Add hover effects to all buttons
+                const buttons = document.querySelectorAll('button');
+                buttons.forEach(button => {
+                    button.addEventListener('mouseenter', playGentleSound);
+                });
+                
+                // Refresh data every 30 seconds
+                setInterval(() => {
+                    if (document.getElementById('profile-tab').classList.contains('active')) {
+                        loadAdminAccounts();
+                    }
+                    if (document.getElementById('admin-tab').classList.contains('active')) {
+                        loadAdminStats();
+                    }
+                }, 30000);
+            });
         </script>
     </body>
     </html>
     `);
 });
+
+// Запуск сервера
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`📡 Сервер запущен на порту ${PORT}`);
     console.log(`🔐 Админ аккаунт: kinel / JenyaKinel`);
