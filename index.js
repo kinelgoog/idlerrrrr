@@ -16,7 +16,7 @@ const CONFIG = {
     BOT_PASSWORD: 'JenyaKinel2023steam',
     SHARED_SECRET: '',
     GAMES: [730], // CS2
-    STATUS: 1
+    STATUS: 7
 };
 
 // Состояние
