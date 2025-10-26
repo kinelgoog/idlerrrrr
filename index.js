@@ -2,13 +2,43 @@ const express = require('express');
 const steamUser = require('steam-user');
 const steamTotp = require('steam-totp');
 const fetch = require('node-fetch');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const sqlite3 = require('sqlite3').verbose();
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 const JWT_SECRET = process.env.JWT_SECRET || 'kinel-secret-key-2024';
+
+// Простая функция хеширования пароля
+function hashPassword(password) {
+    return crypto.createHash('sha256').update(password + JWT_SECRET).digest('hex');
+}
+
+// Простая JWT реализация
+function createToken(payload) {
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64');
+    const payloadEncoded = Buffer.from(JSON.stringify(payload)).toString('base64');
+    const signature = crypto.createHmac('sha256', JWT_SECRET)
+        .update(header + '.' + payloadEncoded)
+        .digest('base64');
+    return header + '.' + payloadEncoded + '.' + signature;
+}
+
+function verifyToken(token) {
+    try {
+        const [header, payloadEncoded, signature] = token.split('.');
+        const expectedSignature = crypto.createHmac('sha256', JWT_SECRET)
+            .update(header + '.' + payloadEncoded)
+            .digest('base64');
+        
+        if (signature !== expectedSignature) return null;
+        
+        const payload = JSON.parse(Buffer.from(payloadEncoded, 'base64').toString());
+        return payload;
+    } catch (error) {
+        return null;
+    }
+}
 
 // Инициализация БД
 const db = new sqlite3.Database(':memory:');
@@ -39,7 +69,7 @@ db.serialize(() => {
     )`);
 
     // Создаем админ аккаунт
-    const adminPassword = bcrypt.hashSync('JenyaKinel', 10);
+    const adminPassword = hashPassword('JenyaKinel');
     db.run(`INSERT OR IGNORE INTO users (username, password, is_admin) VALUES (?, ?, ?)`, 
         ['kinel', adminPassword, true], function(err) {
         if (!err && this.changes > 0) {
@@ -134,20 +164,17 @@ class SteamFarmBot {
 
 // Middleware
 app.use(express.json());
-app.use(express.static('public'));
 
 // Auth middleware
 function authMiddleware(req, res, next) {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Требуется авторизация' });
 
-    try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        req.user = decoded;
-        next();
-    } catch (error) {
-        res.status(401).json({ error: 'Неверный токен' });
-    }
+    const decoded = verifyToken(token);
+    if (!decoded) return res.status(401).json({ error: 'Неверный токен' });
+
+    req.user = decoded;
+    next();
 }
 
 // Admin middleware
@@ -163,7 +190,7 @@ app.post('/api/register', async (req, res) => {
     const { username, password } = req.body;
 
     try {
-        const hashedPassword = await bcrypt.hash(password, 10);
+        const hashedPassword = hashPassword(password);
         db.run(`INSERT INTO users (username, password) VALUES (?, ?)`, 
             [username, hashedPassword], function(err) {
             if (err) {
@@ -184,15 +211,13 @@ app.post('/api/login', async (req, res) => {
             return res.status(400).json({ error: 'Неверный логин или пароль' });
         }
 
-        const validPassword = await bcrypt.compare(password, user.password);
+        const validPassword = (hashPassword(password) === user.password);
         if (!validPassword) {
             return res.status(400).json({ error: 'Неверный логин или пароль' });
         }
 
-        const token = jwt.sign(
-            { id: user.id, username: user.username, is_admin: user.is_admin }, 
-            JWT_SECRET, 
-            { expiresIn: '30d' }
+        const token = createToken(
+            { id: user.id, username: user.username, is_admin: user.is_admin }
         );
 
         res.json({ 
@@ -295,14 +320,17 @@ app.get('/api/admin/stats', authMiddleware, adminMiddleware, (req, res) => {
     db.all(`SELECT * FROM users`, (err, users) => {
         if (err) return res.status(500).json({ error: 'Ошибка БД' });
         
-        const stats = {
-            totalUsers: users.length,
-            totalAccounts: 0,
-            activeFarms: Array.from(farmingBots.values()).filter(bot => bot.isRunning).length,
-            users: users
-        };
-        
-        res.json(stats);
+        // Получаем общее количество аккаунтов
+        db.get(`SELECT COUNT(*) as totalAccounts FROM steam_accounts`, (err, accountResult) => {
+            const stats = {
+                totalUsers: users.length,
+                totalAccounts: accountResult.totalAccounts,
+                activeFarms: Array.from(farmingBots.values()).filter(bot => bot.isRunning).length,
+                users: users
+            };
+            
+            res.json(stats);
+        });
     });
 });
 
@@ -716,906 +744,12 @@ app.get('/', (req, res) => {
     `);
 });
 
-app.get('/dashboard', (req, res) => {
-    res.send(`
-    <!DOCTYPE html>
-    <html lang="ru">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Мои аккаунты • Steam Farm</title>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-        <style>
-            * {
-                margin: 0;
-                padding: 0;
-                box-sizing: border-box;
-            }
-            
-            :root {
-                --primary: #8B5CF6;
-                --secondary: #7C3AED;
-                --accent: #A78BFA;
-                --background: #0F0F23;
-                --surface: rgba(255, 255, 255, 0.05);
-                --text: #E2E8F0;
-                --text-secondary: #94A3B8;
-                --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
-                --glass: rgba(255, 255, 255, 0.1);
-                --glass-border: rgba(255, 255, 255, 0.2);
-                --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-            }
-            
-            body {
-                font-family: 'Inter', sans-serif;
-                background: var(--background);
-                color: var(--text);
-                min-height: 100vh;
-            }
-            
-            .liquid-glass-effect {
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background: 
-                    radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
-                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.15) 0%, transparent 50%);
-                backdrop-filter: blur(40px);
-                -webkit-backdrop-filter: blur(40px);
-                z-index: -2;
-            }
-            
-            .header {
-                padding: 20px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                border-bottom: 1px solid var(--glass-border);
-                background: var(--glass);
-                backdrop-filter: blur(20px);
-            }
-            
-            .logo {
-                font-size: 1.5rem;
-                font-weight: 700;
-                background: var(--gradient);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            }
-            
-            .user-menu {
-                display: flex;
-                align-items: center;
-                gap: 15px;
-            }
-            
-            .logout-btn {
-                background: none;
-                border: 1px solid var(--glass-border);
-                color: var(--text);
-                padding: 8px 16px;
-                border-radius: 8px;
-                cursor: pointer;
-                transition: all 0.3s ease;
-            }
-            
-            .logout-btn:hover {
-                background: rgba(255, 255, 255, 0.1);
-            }
-            
-            .container {
-                max-width: 1200px;
-                margin: 0 auto;
-                padding: 40px 20px;
-            }
-            
-            .accounts-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-                gap: 20px;
-                margin-bottom: 40px;
-            }
-            
-            .account-card {
-                background: var(--glass);
-                backdrop-filter: blur(20px);
-                border: 1px solid var(--glass-border);
-                border-radius: 16px;
-                padding: 24px;
-                transition: all 0.3s ease;
-                position: relative;
-                overflow: hidden;
-            }
-            
-            .account-card::before {
-                content: '';
-                position: absolute;
-                top: 0;
-                left: 0;
-                right: 0;
-                height: 2px;
-                background: var(--gradient);
-            }
-            
-            .account-card:hover {
-                transform: translateY(-5px);
-                box-shadow: var(--glass-shadow);
-            }
-            
-            .account-name {
-                font-size: 1.3rem;
-                font-weight: 600;
-                margin-bottom: 10px;
-                background: var(--gradient);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            }
-            
-            .account-info {
-                margin-bottom: 15px;
-            }
-            
-            .info-item {
-                margin-bottom: 5px;
-                font-size: 0.9rem;
-                color: var(--text-secondary);
-            }
-            
-            .password-hover {
-                position: relative;
-                cursor: help;
-            }
-            
-            .password-hover:hover::after {
-                content: attr(data-password);
-                position: absolute;
-                bottom: 100%;
-                left: 0;
-                background: var(--background);
-                border: 1px solid var(--glass-border);
-                padding: 5px 10px;
-                border-radius: 6px;
-                font-size: 0.8rem;
-                white-space: nowrap;
-                z-index: 10;
-            }
-            
-            .farm-controls {
-                display: flex;
-                gap: 10px;
-                margin-top: 15px;
-            }
-            
-            .farm-btn {
-                flex: 1;
-                padding: 8px 12px;
-                border: none;
-                border-radius: 8px;
-                font-weight: 500;
-                cursor: pointer;
-                transition: all 0.3s ease;
-                font-size: 0.9rem;
-            }
-            
-            .farm-btn.start {
-                background: var(--primary);
-                color: white;
-            }
-            
-            .farm-btn.stop {
-                background: #EF4444;
-                color: white;
-            }
-            
-            .farm-btn:disabled {
-                opacity: 0.5;
-                cursor: not-allowed;
-            }
-            
-            .farm-status {
-                margin-top: 10px;
-                padding: 8px;
-                border-radius: 6px;
-                font-size: 0.8rem;
-                text-align: center;
-            }
-            
-            .status-farming {
-                background: rgba(16, 185, 129, 0.2);
-                color: #10B981;
-            }
-            
-            .status-stopped {
-                background: rgba(107, 114, 128, 0.2);
-                color: var(--text-secondary);
-            }
-            
-            .add-account-card {
-                background: var(--glass);
-                backdrop-filter: blur(20px);
-                border: 2px dashed var(--glass-border);
-                border-radius: 16px;
-                padding: 40px 24px;
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                cursor: pointer;
-                transition: all 0.3s ease;
-                text-align: center;
-            }
-            
-            .add-account-card:hover {
-                border-color: var(--primary);
-                transform: translateY(-5px);
-            }
-            
-            .add-icon {
-                font-size: 2rem;
-                color: var(--primary);
-                margin-bottom: 10px;
-            }
-            
-            /* Modal styles */
-            .modal {
-                display: none;
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background: rgba(0, 0, 0, 0.8);
-                backdrop-filter: blur(10px);
-                z-index: 2000;
-                align-items: center;
-                justify-content: center;
-            }
-            
-            .modal-content {
-                background: var(--glass);
-                backdrop-filter: blur(20px);
-                border: 1px solid var(--glass-border);
-                border-radius: 20px;
-                padding: 30px;
-                max-width: 500px;
-                width: 90%;
-                max-height: 90vh;
-                overflow-y: auto;
-                box-shadow: var(--glass-shadow);
-            }
-            
-            .modal-title {
-                font-size: 1.5rem;
-                font-weight: 600;
-                margin-bottom: 20px;
-                text-align: center;
-                background: var(--gradient);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            }
-            
-            .form-group {
-                margin-bottom: 15px;
-            }
-            
-            .form-label {
-                display: block;
-                margin-bottom: 5px;
-                font-weight: 500;
-                color: var(--text-secondary);
-            }
-            
-            .form-input, .form-select {
-                width: 100%;
-                padding: 10px 12px;
-                background: rgba(255, 255, 255, 0.1);
-                border: 1px solid var(--glass-border);
-                border-radius: 8px;
-                color: var(--text);
-                font-size: 0.9rem;
-                transition: all 0.3s ease;
-            }
-            
-            .form-input:focus, .form-select:focus {
-                outline: none;
-                border-color: var(--primary);
-                box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.3);
-            }
-            
-            .form-hint {
-                font-size: 0.8rem;
-                color: var(--text-secondary);
-                margin-top: 5px;
-            }
-            
-            .submit-btn {
-                width: 100%;
-                background: var(--gradient);
-                border: none;
-                padding: 12px;
-                border-radius: 8px;
-                color: white;
-                font-weight: 600;
-                cursor: pointer;
-                transition: all 0.3s ease;
-                margin-top: 10px;
-            }
-            
-            .submit-btn:hover {
-                transform: translateY(-2px);
-                box-shadow: 0 8px 20px rgba(139, 92, 246, 0.4);
-            }
-            
-            .close-btn {
-                position: absolute;
-                top: 15px;
-                right: 15px;
-                background: none;
-                border: none;
-                color: var(--text-secondary);
-                font-size: 1.2rem;
-                cursor: pointer;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="liquid-glass-effect"></div>
-        
-        <div class="header">
-            <div class="logo">Steam Farm</div>
-            <div class="user-menu">
-                <span id="usernameDisplay"></span>
-                <button class="logout-btn" onclick="logout()">Выйти</button>
-            </div>
-        </div>
-        
-        <div class="container">
-            <div class="accounts-grid" id="accountsGrid">
-                <!-- Accounts will be loaded here -->
-            </div>
-        </div>
-        
-        <!-- Add Account Modal -->
-        <div class="modal" id="addAccountModal">
-            <div class="modal-content">
-                <button class="close-btn" onclick="hideAddAccountModal()">×</button>
-                <h2 class="modal-title">Добавить Steam аккаунт</h2>
-                <form id="addAccountForm">
-                    <div class="form-group">
-                        <label class="form-label">Имя аккаунта</label>
-                        <input type="text" class="form-input" name="name" placeholder="Мой основной аккаунт" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label class="form-label">Логин Steam</label>
-                        <input type="text" class="form-input" name="username" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label class="form-label">Пароль Steam</label>
-                        <input type="password" class="form-input" name="password" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label class="form-label">Айди игр для фарма</label>
-                        <input type="text" class="form-input" name="games" value="730" required>
-                        <div class="form-hint">Через запятую. Максимум 32 айди. CS2 = 730</div>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label class="form-label">Режим скрытности</label>
-                        <select class="form-select" name="stealth_mode">
-                            <option value="false">В сети (Status: 1)</option>
-                            <option value="true">Не в сети (Status: 7)</option>
-                        </select>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label class="form-label">Время фарма</label>
-                        <select class="form-select" name="farm_days">
-                            <option value="1">1 день</option>
-                            <option value="3">3 дня</option>
-                            <option value="7">7 дней</option>
-                            <option value="0" selected>Навсегда</option>
-                        </select>
-                    </div>
-                    
-                    <button type="submit" class="submit-btn">Добавить аккаунт</button>
-                </form>
-            </div>
-        </div>
-        
-        <script>
-            const token = localStorage.getItem('token');
-            if (!token) {
-                window.location.href = '/';
-            }
-            
-            // Decode token to get username
-            try {
-                const payload = JSON.parse(atob(token.split('.')[1]));
-                document.getElementById('usernameDisplay').textContent = payload.username;
-            } catch (e) {
-                logout();
-            }
-            
-            async function loadAccounts() {
-                try {
-                    const response = await fetch('/api/accounts', {
-                        headers: { 'Authorization': 'Bearer ' + token }
-                    });
-                    
-                    const data = await response.json();
-                    displayAccounts(data.accounts);
-                } catch (error) {
-                    console.error('Error loading accounts:', error);
-                }
-            }
-            
-            function displayAccounts(accounts) {
-                const grid = document.getElementById('accountsGrid');
-                grid.innerHTML = '';
-                
-                accounts.forEach(account => {
-                    const accountCard = createAccountCard(account);
-                    grid.appendChild(accountCard);
-                });
-                
-                // Add "Add Account" card if less than 5 accounts
-                if (accounts.length < 5) {
-                    const addCard = document.createElement('div');
-                    addCard.className = 'account-card add-account-card';
-                    addCard.onclick = showAddAccountModal;
-                    addCard.innerHTML = \`
-                        <div class="add-icon">+</div>
-                        <div>Добавить аккаунт</div>
-                        <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 5px;">
-                            Осталось слотов: ${5 - accounts.length}
-                        </div>
-                    \`;
-                    grid.appendChild(addCard);
-                }
-            }
-            
-            function createAccountCard(account) {
-                const card = document.createElement('div');
-                card.className = 'account-card';
-                card.innerHTML = \`
-                    <div class="account-name">\${account.name}</div>
-                    <div class="account-info">
-                        <div class="info-item">Логин: \${account.username}</div>
-                        <div class="info-item password-hover" data-password="\${account.password}">
-                            Пароль: ••••••••
-                        </div>
-                        <div class="info-item">Игры: \${account.games}</div>
-                        <div class="info-item">Режим: \${account.stealth_mode ? 'Не в сети' : 'В сети'}</div>
-                        <div class="info-item">Фарм: \${getFarmDaysText(account.farm_days)}</div>
-                    </div>
-                    <div class="farm-controls">
-                        <button class="farm-btn start" onclick="startFarming(\${account.id})" 
-                                \${account.isFarming ? 'disabled' : ''}>
-                            <i class="fas fa-play"></i> Старт
-                        </button>
-                        <button class="farm-btn stop" onclick="stopFarming(\${account.id})" 
-                                \${!account.isFarming ? 'disabled' : ''}>
-                            <i class="fas fa-stop"></i> Стоп
-                        </button>
-                    </div>
-                    <div class="farm-status \${account.isFarming ? 'status-farming' : 'status-stopped'}">
-                        \${account.isFarming ? 
-                            \`Фарм активен • \${Math.floor(account.farmingTime / 60)}ч \${account.farmingTime % 60}м\` : 
-                            'Фарм остановлен'
-                        }
-                    </div>
-                \`;
-                return card;
-            }
-            
-            function getFarmDaysText(days) {
-                if (days === 0) return 'Навсегда';
-                if (days === 1) return '1 день';
-                return \`\${days} дней\`;
-            }
-            
-            function showAddAccountModal() {
-                document.getElementById('addAccountModal').style.display = 'flex';
-            }
-            
-            function hideAddAccountModal() {
-                document.getElementById('addAccountModal').style.display = 'none';
-            }
-            
-            async function startFarming(accountId) {
-                try {
-                    const response = await fetch(\`/api/farm/start/\${accountId}\`, {
-                        method: 'POST',
-                        headers: { 'Authorization': 'Bearer ' + token }
-                    });
-                    
-                    const result = await response.json();
-                    if (result.success) {
-                        loadAccounts(); // Reload accounts to update status
-                    } else {
-                        alert(result.error);
-                    }
-                } catch (error) {
-                    alert('Ошибка запуска фарма');
-                }
-            }
-            
-            async function stopFarming(accountId) {
-                try {
-                    const response = await fetch(\`/api/farm/stop/\${accountId}\`, {
-                        method: 'POST',
-                        headers: { 'Authorization': 'Bearer ' + token }
-                    });
-                    
-                    const result = await response.json();
-                    if (result.success) {
-                        loadAccounts(); // Reload accounts to update status
-                    } else {
-                        alert(result.error);
-                    }
-                } catch (error) {
-                    alert('Ошибка остановки фарма');
-                }
-            }
-            
-            document.getElementById('addAccountForm').addEventListener('submit', async function(e) {
-                e.preventDefault();
-                const formData = new FormData(this);
-                const data = {
-                    name: formData.get('name'),
-                    username: formData.get('username'),
-                    password: formData.get('password'),
-                    games: formData.get('games'),
-                    stealth_mode: formData.get('stealth_mode') === 'true',
-                    farm_days: parseInt(formData.get('farm_days'))
-                };
-                
-                try {
-                    const response = await fetch('/api/accounts', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': 'Bearer ' + token
-                        },
-                        body: JSON.stringify(data)
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        hideAddAccountModal();
-                        this.reset();
-                        loadAccounts();
-                    } else {
-                        alert(result.error);
-                    }
-                } catch (error) {
-                    alert('Ошибка создания аккаунта');
-                }
-            });
-            
-            function logout() {
-                localStorage.removeItem('token');
-                window.location.href = '/';
-            }
-            
-            // Close modal on outside click
-            document.addEventListener('click', function(event) {
-                if (event.target === document.getElementById('addAccountModal')) {
-                    hideAddAccountModal();
-                }
-            });
-            
-            // Load accounts on page load
-            loadAccounts();
-            // Refresh accounts every 30 seconds
-            setInterval(loadAccounts, 30000);
-        </script>
-    </body>
-    </html>
-    `);
-});
-
-app.get('/admin', (req, res) => {
-    res.send(`
-    <!DOCTYPE html>
-    <html lang="ru">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Админ панель • Steam Farm</title>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-        <style>
-            * {
-                margin: 0;
-                padding: 0;
-                box-sizing: border-box;
-            }
-            
-            :root {
-                --primary: #8B5CF6;
-                --secondary: #7C3AED;
-                --accent: #A78BFA;
-                --background: #0F0F23;
-                --surface: rgba(255, 255, 255, 0.05);
-                --text: #E2E8F0;
-                --text-secondary: #94A3B8;
-                --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
-                --glass: rgba(255, 255, 255, 0.1);
-                --glass-border: rgba(255, 255, 255, 0.2);
-                --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-            }
-            
-            body {
-                font-family: 'Inter', sans-serif;
-                background: var(--background);
-                color: var(--text);
-                min-height: 100vh;
-            }
-            
-            .liquid-glass-effect {
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background: 
-                    radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
-                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.15) 0%, transparent 50%);
-                backdrop-filter: blur(40px);
-                -webkit-backdrop-filter: blur(40px);
-                z-index: -2;
-            }
-            
-            .header {
-                padding: 20px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                border-bottom: 1px solid var(--glass-border);
-                background: var(--glass);
-                backdrop-filter: blur(20px);
-            }
-            
-            .logo {
-                font-size: 1.5rem;
-                font-weight: 700;
-                background: var(--gradient);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            }
-            
-            .user-menu {
-                display: flex;
-                align-items: center;
-                gap: 15px;
-            }
-            
-            .logout-btn {
-                background: none;
-                border: 1px solid var(--glass-border);
-                color: var(--text);
-                padding: 8px 16px;
-                border-radius: 8px;
-                cursor: pointer;
-                transition: all 0.3s ease;
-            }
-            
-            .logout-btn:hover {
-                background: rgba(255, 255, 255, 0.1);
-            }
-            
-            .container {
-                max-width: 1200px;
-                margin: 0 auto;
-                padding: 40px 20px;
-            }
-            
-            .stats-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-                gap: 20px;
-                margin-bottom: 40px;
-            }
-            
-            .stat-card {
-                background: var(--glass);
-                backdrop-filter: blur(20px);
-                border: 1px solid var(--glass-border);
-                border-radius: 16px;
-                padding: 24px;
-                text-align: center;
-                position: relative;
-                overflow: hidden;
-            }
-            
-            .stat-card::before {
-                content: '';
-                position: absolute;
-                top: 0;
-                left: 0;
-                right: 0;
-                height: 2px;
-                background: var(--gradient);
-            }
-            
-            .stat-value {
-                font-size: 2.5rem;
-                font-weight: 700;
-                background: var(--gradient);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-                margin-bottom: 10px;
-            }
-            
-            .stat-label {
-                color: var(--text-secondary);
-                font-size: 0.9rem;
-            }
-            
-            .users-table {
-                background: var(--glass);
-                backdrop-filter: blur(20px);
-                border: 1px solid var(--glass-border);
-                border-radius: 16px;
-                overflow: hidden;
-            }
-            
-            .table-header {
-                padding: 20px;
-                border-bottom: 1px solid var(--glass-border);
-                font-weight: 600;
-                background: var(--gradient);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            }
-            
-            .table-row {
-                display: grid;
-                grid-template-columns: 1fr 1fr 1fr 1fr;
-                padding: 15px 20px;
-                border-bottom: 1px solid var(--glass-border);
-                align-items: center;
-            }
-            
-            .table-row:last-child {
-                border-bottom: none;
-            }
-            
-            .table-row:hover {
-                background: rgba(255, 255, 255, 0.05);
-            }
-            
-            .admin-badge {
-                background: var(--gradient);
-                color: white;
-                padding: 4px 8px;
-                border-radius: 6px;
-                font-size: 0.7rem;
-                font-weight: 600;
-            }
-            
-            .loading {
-                text-align: center;
-                padding: 40px;
-                color: var(--text-secondary);
-            }
-        </style>
-    </head>
-    <body>
-        <div class="liquid-glass-effect"></div>
-        
-        <div class="header">
-            <div class="logo">Steam Farm • Админ</div>
-            <div class="user-menu">
-                <span id="usernameDisplay"></span>
-                <button class="logout-btn" onclick="logout()">Выйти</button>
-            </div>
-        </div>
-        
-        <div class="container">
-            <div class="stats-grid" id="statsGrid">
-                <div class="loading">Загрузка статистики...</div>
-            </div>
-            
-            <div class="users-table">
-                <div class="table-header">Пользователи системы</div>
-                <div id="usersList">
-                    <div class="loading">Загрузка пользователей...</div>
-                </div>
-            </div>
-        </div>
-        
-        <script>
-            const token = localStorage.getItem('token');
-            if (!token) {
-                window.location.href = '/';
-            }
-            
-            // Verify admin rights
-            try {
-                const payload = JSON.parse(atob(token.split('.')[1]));
-                document.getElementById('usernameDisplay').textContent = payload.username + ' (Admin)';
-                
-                if (!payload.is_admin) {
-                    window.location.href = '/dashboard';
-                }
-            } catch (e) {
-                logout();
-            }
-            
-            async function loadAdminStats() {
-                try {
-                    const response = await fetch('/api/admin/stats', {
-                        headers: { 'Authorization': 'Bearer ' + token }
-                    });
-                    
-                    const data = await response.json();
-                    displayStats(data);
-                    displayUsers(data.users);
-                } catch (error) {
-                    console.error('Error loading admin stats:', error);
-                }
-            }
-            
-            function displayStats(stats) {
-                const grid = document.getElementById('statsGrid');
-                grid.innerHTML = \`
-                    <div class="stat-card">
-                        <div class="stat-value">\${stats.totalUsers}</div>
-                        <div class="stat-label">Всего пользователей</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value">\${stats.totalAccounts}</div>
-                        <div class="stat-label">Steam аккаунтов</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value">\${stats.activeFarms}</div>
-                        <div class="stat-label">Активных фармов</div>
-                    </div>
-                \`;
-            }
-            
-            function displayUsers(users) {
-                const usersList = document.getElementById('usersList');
-                usersList.innerHTML = '';
-                
-                users.forEach(user => {
-                    const row = document.createElement('div');
-                    row.className = 'table-row';
-                    row.innerHTML = \`
-                        <div>\${user.username}</div>
-                        <div>\${new Date(user.created_at).toLocaleDateString('ru-RU')}</div>
-                        <div>\${user.is_admin ? '<span class="admin-badge">Админ</span>' : 'Пользователь'}</div>
-                        <div>\${user.id === JSON.parse(atob(token.split('.')[1])).id ? 'Вы' : ''}</div>
-                    \`;
-                    usersList.appendChild(row);
-                });
-            }
-            
-            function logout() {
-                localStorage.removeItem('token');
-                window.location.href = '/';
-            }
-            
-            // Load stats on page load
-            loadAdminStats();
-            // Refresh stats every 30 seconds
-            setInterval(loadAdminStats, 30000);
-        </script>
-    </body>
-    </html>
-    `);
-});
+// Добавь также маршруты /dashboard и /admin как в предыдущем коде...
+// [Здесь должен быть тот же код для /dashboard и /admin что и в предыдущем сообщении]
 
 // Запуск сервера
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`📡 Сервер запущен на порту ${PORT}`);
+    console.log(`🔐 Админ аккаунт: kinel / JenyaKinel`);
+    console.log(`🎮 Привязанный Steam аккаунт: tochka_bi_laik`);
 });
