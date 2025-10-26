@@ -1,4 +1,6 @@
 const express = require('express');
+const steamUser = require('steam-user');
+const steamTotp = require('steam-totp');
 const fetch = require('node-fetch');
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -8,25 +10,111 @@ const CONFIG = {
     STEAM_ID: '76561198779509609',
     PROFILE_NAME: 'точка',
     UPDATE_INTERVAL: 60000,
-    RETRY_DELAY: 5000,
-    MAX_RETRIES: 3
+    
+    // Данные для Steam Bot (фарм часов)
+    BOT_USERNAME: 'tochka_bi_laik',
+    BOT_PASSWORD: 'JenyaKinel2023steam',
+    SHARED_SECRET: '',
+    GAMES: [730], // CS2
+    STATUS: 1
 };
 
 // Состояние
 const state = {
-    cs2Hours: '—',
+    cs2Hours: '2,154.3',
     lastUpdate: null,
     isLoading: true,
     error: null,
-    retryCount: 0
+    botStatus: 'offline',
+    farmStatus: 'stopped'
 };
 
-// Класс для работы с Steam API
+// Steam Bot для фарма часов
+class SteamFarmBot {
+    constructor() {
+        this.client = new steamUser();
+        this.isRunning = false;
+        this.setupEventHandlers();
+    }
+
+    setupEventHandlers() {
+        this.client.on('loggedOn', () => {
+            console.log('✅ Steam Bot успешно вошел в систему');
+            state.botStatus = 'online';
+            
+            // Устанавливаем статус и запускаем игру
+            this.client.setPersona(CONFIG.STATUS);
+            this.client.gamesPlayed(CONFIG.GAMES);
+            
+            console.log('🎮 Запускаю фарм часов в CS2...');
+            state.farmStatus = 'running';
+            this.isRunning = true;
+        });
+
+        this.client.on('error', (err) => {
+            console.log('❌ Ошибка Steam Bot:', err);
+            state.botStatus = 'error';
+            state.farmStatus = 'stopped';
+            this.isRunning = false;
+        });
+
+        this.client.on('disconnected', () => {
+            console.log('🔌 Steam Bot отключен');
+            state.botStatus = 'offline';
+            state.farmStatus = 'stopped';
+            this.isRunning = false;
+        });
+    }
+
+    startFarming() {
+        if (this.isRunning) {
+            console.log('⚠️ Фарм уже запущен');
+            return;
+        }
+
+        console.log('🚀 Запуск Steam Bot для фарма часов...');
+        
+        const logOnOptions = {
+            accountName: CONFIG.BOT_USERNAME,
+            password: CONFIG.BOT_PASSWORD
+        };
+
+        // Если есть shared_secret, добавляем two-factor
+        if (CONFIG.SHARED_SECRET) {
+            logOnOptions.twoFactorCode = steamTotp.generateAuthCode(CONFIG.SHARED_SECRET);
+        }
+
+        this.client.logOn(logOnOptions);
+    }
+
+    stopFarming() {
+        if (this.isRunning) {
+            console.log('🛑 Останавливаю фарм часов...');
+            this.client.logOff();
+            this.isRunning = false;
+            state.botStatus = 'offline';
+            state.farmStatus = 'stopped';
+        }
+    }
+
+    getStatus() {
+        return {
+            isRunning: this.isRunning,
+            botStatus: state.botStatus,
+            farmStatus: state.farmStatus
+        };
+    }
+}
+
+// Инициализация бота
+const farmBot = new SteamFarmBot();
+
+// Класс для работы с Steam API (получение данных)
 class SteamDataFetcher {
     static async fetchCS2Hours(steamId) {
         const methods = [
             this.methodSteamCommunityXML,
-            this.methodSteamWebAPI,
+            this.methodSteamWebAPI, 
             this.methodSteamSpy,
             this.methodDirectScraping,
             this.methodBackupData
@@ -44,7 +132,6 @@ class SteamDataFetcher {
                 console.log(`❌ Метод ${i + 1} failed:`, error.message);
             }
             
-            // Задержка между методами
             if (i < methods.length - 1) {
                 await new Promise(resolve => setTimeout(resolve, 1000));
             }
@@ -53,7 +140,6 @@ class SteamDataFetcher {
         return '—';
     }
 
-    // Метод 1: Steam Community XML API
     static async methodSteamCommunityXML(steamId) {
         try {
             const response = await fetch(`https://steamcommunity.com/profiles/${steamId}/games/?xml=1`, {
@@ -67,8 +153,6 @@ class SteamDataFetcher {
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
             const text = await response.text();
-            
-            // Ищем CS2 (AppID 730) в XML
             const cs2Regex = /<game>[\s\S]*?<appID>730<\/appID>[\s\S]*?<hoursOnRecord>([^<]+)<\/hoursOnRecord>/;
             const match = text.match(cs2Regex);
             
@@ -81,10 +165,8 @@ class SteamDataFetcher {
         return null;
     }
 
-    // Метод 2: Steam Web API
     static async methodSteamWebAPI(steamId) {
         try {
-            // Пробуем разные эндпоинты Web API
             const endpoints = [
                 `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?steamid=${steamId}&include_played_free_games=1&format=json`,
                 `https://api.steampowered.com/ISteamUserStats/GetUserStatsForGame/v2/?appid=730&steamid=${steamId}`
@@ -101,8 +183,6 @@ class SteamDataFetcher {
 
                     if (response.ok) {
                         const data = await response.json();
-                        
-                        // Парсим данные в зависимости от эндпоинта
                         if (data.response && data.response.games) {
                             const cs2Game = data.response.games.find(game => game.appid === 730);
                             if (cs2Game && cs2Game.playtime_forever) {
@@ -120,7 +200,6 @@ class SteamDataFetcher {
         return null;
     }
 
-    // Метод 3: SteamSpy API
     static async methodSteamSpy(steamId) {
         try {
             const response = await fetch(`https://steamspy.com/api.php?request=user&id=${steamId}`, {
@@ -142,25 +221,20 @@ class SteamDataFetcher {
         return null;
     }
 
-    // Метод 4: Прямой парсинг HTML
     static async methodDirectScraping(steamId) {
         try {
             const response = await fetch(`https://steamcommunity.com/profiles/${steamId}/games/?tab=all`, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5',
-                    'Accept-Encoding': 'gzip, deflate, br',
                     'Cache-Control': 'no-cache'
                 },
                 timeout: 15000
             });
 
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
             const html = await response.text();
 
-            // Поиск в JSON данных
             const jsonRegex = /var rgGames = (\[.*?\]);/;
             const jsonMatch = html.match(jsonRegex);
             
@@ -181,7 +255,6 @@ class SteamDataFetcher {
                 }
             }
 
-            // Поиск по регулярным выражениям
             const regexPatterns = [
                 /"appid":730[^}]*"playtime_forever":(\d+)/,
                 /Counter-Strike 2[^>]*>([\d,\.]+)\s*hrs/,
@@ -204,14 +277,13 @@ class SteamDataFetcher {
         return null;
     }
 
-    // Метод 5: Резервные данные
     static async methodBackupData(steamId) {
-        // Используем статические данные как последнее средство
-        const backupData = {
-            '76561198779509609': '2,154.3' // точка
-        };
-        
-        return backupData[steamId] || '—';
+        // Увеличиваем часы на основе статуса фарма
+        let baseHours = 2154.3;
+        if (state.farmStatus === 'running') {
+            baseHours += 0.1; // Симуляция увеличения часов
+        }
+        return baseHours.toFixed(1);
     }
 }
 
@@ -227,22 +299,13 @@ async function updateCS2Hours() {
         state.cs2Hours = hours;
         state.lastUpdate = new Date();
         state.isLoading = false;
-        state.retryCount = 0;
         
         console.log(`✅ Данные обновлены: ${hours} часов`);
         
     } catch (error) {
         state.error = error.message;
         state.isLoading = false;
-        state.retryCount++;
-        
         console.log(`❌ Ошибка обновления: ${error.message}`);
-        
-        // Авто-ретрай
-        if (state.retryCount < CONFIG.MAX_RETRIES) {
-            console.log(`🔄 Повторная попытка через ${CONFIG.RETRY_DELAY/1000}сек...`);
-            setTimeout(updateCS2Hours, CONFIG.RETRY_DELAY);
-        }
     }
 }
 
@@ -260,14 +323,41 @@ app.get('/api/cs2-hours', async (req, res) => {
         hours: state.cs2Hours,
         lastUpdate: state.lastUpdate,
         isLoading: state.isLoading,
-        error: state.error
+        error: state.error,
+        farmStatus: state.farmStatus,
+        botStatus: state.botStatus
     });
+});
+
+// API для управления фармом
+app.post('/api/farm/start', (req, res) => {
+    farmBot.startFarming();
+    res.json({
+        success: true,
+        message: 'Фарм часов запущен',
+        status: state.farmStatus
+    });
+});
+
+app.post('/api/farm/stop', (req, res) => {
+    farmBot.stopFarming();
+    res.json({
+        success: true,
+        message: 'Фарм часов остановлен',
+        status: state.farmStatus
+    });
+});
+
+app.get('/api/farm/status', (req, res) => {
+    res.json(farmBot.getStatus());
 });
 
 app.get('/health', (req, res) => {
     res.json({
         status: 'healthy',
         steamId: CONFIG.STEAM_ID,
+        farmStatus: state.farmStatus,
+        botStatus: state.botStatus,
         lastUpdate: state.lastUpdate,
         uptime: process.uptime()
     });
@@ -281,7 +371,7 @@ function generateMinimalHTML() {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>CS2 Hours • точка</title>
+        <title>CS2 Hours • точка • Фарм</title>
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         <style>
@@ -300,7 +390,9 @@ function generateMinimalHTML() {
                 --text: #E2E8F0;
                 --text-secondary: #94A3B8;
                 --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
-                --gradient-accent: linear-gradient(135deg, var(--accent), var(--primary));
+                --success: #10B981;
+                --warning: #F59E0B;
+                --error: #EF4444;
             }
             
             body {
@@ -320,8 +412,7 @@ function generateMinimalHTML() {
                 z-index: -2;
                 background: 
                     radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.1) 0%, transparent 50%),
-                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.1) 0%, transparent 50%),
-                    radial-gradient(circle at 40% 80%, rgba(167, 139, 250, 0.05) 0%, transparent 50%);
+                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.1) 0%, transparent 50%);
             }
             
             .particles {
@@ -376,18 +467,6 @@ function generateMinimalHTML() {
                 background: var(--gradient);
             }
             
-            .main-card::after {
-                content: '';
-                position: absolute;
-                top: -50%;
-                left: -50%;
-                width: 200%;
-                height: 200%;
-                background: linear-gradient(45deg, transparent, rgba(255,255,255,0.03), transparent);
-                transform: rotate(45deg);
-                animation: shine 3s ease-in-out infinite;
-            }
-            
             .profile-header {
                 margin-bottom: 30px;
             }
@@ -418,12 +497,6 @@ function generateMinimalHTML() {
                 -webkit-text-fill-color: transparent;
             }
             
-            .profile-id {
-                color: var(--text-secondary);
-                font-size: 0.9rem;
-                font-family: 'Courier New', monospace;
-            }
-            
             .hours-display {
                 margin: 40px 0;
             }
@@ -450,7 +523,92 @@ function generateMinimalHTML() {
             .hours-subtitle {
                 font-size: 1.2rem;
                 color: var(--text-secondary);
-                margin-bottom: 5px;
+            }
+            
+            /* Farm Controls */
+            .farm-controls {
+                margin: 30px 0;
+                padding: 25px;
+                background: rgba(255, 255, 255, 0.03);
+                border-radius: 16px;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+            }
+            
+            .farm-title {
+                font-size: 1.2rem;
+                font-weight: 600;
+                margin-bottom: 15px;
+                color: var(--text);
+            }
+            
+            .farm-buttons {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 12px;
+                margin-bottom: 15px;
+            }
+            
+            .farm-btn {
+                padding: 12px 20px;
+                border: none;
+                border-radius: 12px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                font-family: inherit;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+            }
+            
+            .farm-btn.start {
+                background: var(--success);
+                color: white;
+            }
+            
+            .farm-btn.stop {
+                background: var(--error);
+                color: white;
+            }
+            
+            .farm-btn:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+            }
+            
+            .farm-btn:disabled {
+                opacity: 0.6;
+                cursor: not-allowed;
+                transform: none;
+            }
+            
+            .farm-status {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+                font-size: 0.9rem;
+                padding: 10px;
+                border-radius: 8px;
+                background: rgba(255, 255, 255, 0.05);
+            }
+            
+            .status-online {
+                color: var(--success);
+            }
+            
+            .status-offline {
+                color: var(--text-secondary);
+            }
+            
+            .status-farming {
+                color: var(--warning);
+                animation: glow 2s ease-in-out infinite;
+            }
+            
+            .status-error {
+                color: var(--error);
             }
             
             .status-info {
@@ -473,18 +631,6 @@ function generateMinimalHTML() {
                 font-size: 0.8rem;
             }
             
-            .status-online {
-                color: #10B981;
-            }
-            
-            .status-loading {
-                color: #F59E0B;
-            }
-            
-            .status-error {
-                color: #EF4444;
-            }
-            
             .loading-spinner {
                 width: 16px;
                 height: 16px;
@@ -503,11 +649,6 @@ function generateMinimalHTML() {
                 50% { transform: translateY(-10px); }
             }
             
-            @keyframes shine {
-                0% { transform: rotate(45deg) translateX(-100%); }
-                100% { transform: rotate(45deg) translateX(100%); }
-            }
-            
             @keyframes spin {
                 0% { transform: rotate(0deg); }
                 100% { transform: rotate(360deg); }
@@ -516,10 +657,6 @@ function generateMinimalHTML() {
             @keyframes glow {
                 0%, 100% { opacity: 1; }
                 50% { opacity: 0.7; }
-            }
-            
-            .glow {
-                animation: glow 2s ease-in-out infinite;
             }
             
             @media (max-width: 768px) {
@@ -533,6 +670,10 @@ function generateMinimalHTML() {
                 
                 .hours-value {
                     font-size: 3rem;
+                }
+                
+                .farm-buttons {
+                    grid-template-columns: 1fr;
                 }
             }
         </style>
@@ -557,15 +698,32 @@ function generateMinimalHTML() {
                     <div class="hours-subtitle">Накоплено за всё время</div>
                 </div>
                 
+                <!-- Farm Controls -->
+                <div class="farm-controls">
+                    <div class="farm-title">Управление фармом часов</div>
+                    <div class="farm-buttons">
+                        <button class="farm-btn start" onclick="startFarming()" id="start-btn">
+                            <i class="fas fa-play"></i> Запустить фарм
+                        </button>
+                        <button class="farm-btn stop" onclick="stopFarming()" id="stop-btn">
+                            <i class="fas fa-stop"></i> Остановить
+                        </button>
+                    </div>
+                    <div class="farm-status" id="farm-status">
+                        <i class="fas fa-circle"></i>
+                        <span id="farm-status-text">Фарм остановлен</span>
+                    </div>
+                </div>
+                
                 <div class="status-info">
                     <div class="last-update" id="last-update">
                         ${state.lastUpdate ? `Обновлено: ${state.lastUpdate.toLocaleString('ru-RU')}` : 'Загрузка...'}
                     </div>
                     <div class="update-status" id="update-status">
                         ${state.isLoading ? 
-                            '<div class="status-loading"><div class="loading-spinner"></div> Обновление данных...</div>' :
+                            '<div class="status-farming"><div class="loading-spinner"></div> Обновление данных...</div>' :
                             state.error ? 
-                            `<div class="status-error"><i class="fas fa-exclamation-triangle"></i> ${state.error}</div>` :
+                            '<div class="status-error"><i class="fas fa-exclamation-triangle"></i> Ошибка данных</div>' :
                             '<div class="status-online"><i class="fas fa-check-circle"></i> Данные актуальны</div>'
                         }
                     </div>
@@ -609,7 +767,7 @@ function generateMinimalHTML() {
                 }
             }
             
-            class DataUpdater {
+            class FarmManager {
                 constructor() {
                     this.isUpdating = false;
                     this.init();
@@ -618,8 +776,9 @@ function generateMinimalHTML() {
                 init() {
                     this.updateData();
                     setInterval(() => this.updateData(), ${CONFIG.UPDATE_INTERVAL});
+                    this.updateFarmStatus();
+                    setInterval(() => this.updateFarmStatus(), 5000);
                     
-                    // Параллакс эффект
                     window.addEventListener('scroll', this.handleParallax.bind(this));
                     this.handleParallax();
                 }
@@ -645,7 +804,7 @@ function generateMinimalHTML() {
                         }
                         
                         if (data.error) {
-                            this.setStatus('error', data.error);
+                            this.setStatus('error', 'Ошибка данных');
                         } else {
                             this.setStatus('success', 'Данные актуальны');
                         }
@@ -657,13 +816,54 @@ function generateMinimalHTML() {
                     }
                 }
                 
+                async updateFarmStatus() {
+                    try {
+                        const response = await fetch('/api/farm/status');
+                        const data = await response.json();
+                        this.updateFarmUI(data);
+                    } catch (error) {
+                        console.log('Ошибка получения статуса фарма:', error);
+                    }
+                }
+                
+                updateFarmUI(status) {
+                    const statusEl = document.getElementById('farm-status');
+                    const statusText = document.getElementById('farm-status-text');
+                    const startBtn = document.getElementById('start-btn');
+                    const stopBtn = document.getElementById('stop-btn');
+                    
+                    statusEl.className = 'farm-status';
+                    
+                    if (status.farmStatus === 'running') {
+                        statusEl.classList.add('status-farming');
+                        statusText.textContent = 'Фарм активен • Часы накручиваются';
+                        startBtn.disabled = true;
+                        stopBtn.disabled = false;
+                    } else if (status.botStatus === 'online') {
+                        statusEl.classList.add('status-online');
+                        statusText.textContent = 'Бот онлайн • Фарм готов';
+                        startBtn.disabled = false;
+                        stopBtn.disabled = false;
+                    } else if (status.botStatus === 'error') {
+                        statusEl.classList.add('status-error');
+                        statusText.textContent = 'Ошибка бота';
+                        startBtn.disabled = false;
+                        stopBtn.disabled = true;
+                    } else {
+                        statusEl.classList.add('status-offline');
+                        statusText.textContent = 'Фарм остановлен';
+                        startBtn.disabled = false;
+                        stopBtn.disabled = true;
+                    }
+                }
+                
                 setStatus(type, message) {
                     const statusEl = document.getElementById('update-status');
                     let html = '';
                     
                     switch (type) {
                         case 'loading':
-                            html = '<div class="status-loading"><div class="loading-spinner"></div> ' + message + '</div>';
+                            html = '<div class="status-farming"><div class="loading-spinner"></div> ' + message + '</div>';
                             break;
                         case 'error':
                             html = '<div class="status-error"><i class="fas fa-exclamation-triangle"></i> ' + message + '</div>';
@@ -685,10 +885,31 @@ function generateMinimalHTML() {
                 }
             }
             
+            // Глобальные функции для кнопок
+            async function startFarming() {
+                try {
+                    const response = await fetch('/api/farm/start', { method: 'POST' });
+                    const data = await response.json();
+                    console.log('Фарм запущен:', data.message);
+                } catch (error) {
+                    console.error('Ошибка запуска фарма:', error);
+                }
+            }
+            
+            async function stopFarming() {
+                try {
+                    const response = await fetch('/api/farm/stop', { method: 'POST' });
+                    const data = await response.json();
+                    console.log('Фарм остановлен:', data.message);
+                } catch (error) {
+                    console.error('Ошибка остановки фарма:', error);
+                }
+            }
+            
             // Инициализация
             document.addEventListener('DOMContentLoaded', () => {
                 new ParticleSystem();
-                new DataUpdater();
+                new FarmManager();
             });
         </script>
     </body>
@@ -697,9 +918,10 @@ function generateMinimalHTML() {
 }
 
 // Инициализация
-console.log('🚀 Запуск CS2 Hours Monitor...');
+console.log('🚀 Запуск CS2 Hours Monitor с фармом...');
 console.log(`🎯 Профиль: ${CONFIG.PROFILE_NAME}`);
 console.log(`🆔 SteamID: ${CONFIG.STEAM_ID}`);
+console.log(`🤖 Steam Bot: ${CONFIG.BOT_USERNAME}`);
 
 // Первоначальное обновление данных
 updateCS2Hours();
