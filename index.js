@@ -7,48 +7,56 @@ const PORT = process.env.PORT || 10000;
 const CONFIG = {
     STEAM_ID: '76561198779509609',
     PROFILE_NAME: 'точка',
-    UPDATE_INTERVAL: 60000, // 1 минута
-    THEME: {
-        primary: '#8B5CF6',
-        secondary: '#7C3AED', 
-        accent: '#A78BFA',
-        background: '#0F0F23',
-        surface: '#1A1A2E',
-        text: '#E2E8F0',
-        textSecondary: '#94A3B8'
-    }
+    UPDATE_INTERVAL: 60000,
+    RETRY_DELAY: 5000,
+    MAX_RETRIES: 3
 };
 
-// Глобальное состояние
+// Состояние
 const state = {
-    cs2Hours: '2,154.3',
-    totalHours: '4,287.6',
-    twoWeeksHours: '42.7',
-    level: 47,
-    badges: 23,
-    games: 87,
-    friends: 156,
-    status: 'online',
-    lastPlayed: '2 часа назад',
-    achievementCount: 127,
-    profileCreated: '5 лет назад',
-    avatar: 'https://avatars.steamstatic.com/6b9d2c1c9c8b1c9c8b1c9c8b1c9c8b1c9c8b1c9c_full.jpg',
+    cs2Hours: '—',
     lastUpdate: null,
-    statistics: {
-        kills: '45,287',
-        deaths: '23,456',
-        kdRatio: '1.93',
-        wins: '1,234',
-        headshots: '12,345',
-        accuracy: '38.2%'
-    }
+    isLoading: true,
+    error: null,
+    retryCount: 0
 };
 
-// Steam API функции
-class SteamAPI {
-    static async getProfileData(steamId) {
+// Класс для работы с Steam API
+class SteamDataFetcher {
+    static async fetchCS2Hours(steamId) {
+        const methods = [
+            this.methodSteamCommunityXML,
+            this.methodSteamWebAPI,
+            this.methodSteamSpy,
+            this.methodDirectScraping,
+            this.methodBackupData
+        ];
+
+        for (let i = 0; i < methods.length; i++) {
+            try {
+                console.log(`🔄 Попытка метода ${i + 1}...`);
+                const hours = await methods[i](steamId);
+                if (hours && hours !== '—') {
+                    console.log(`✅ Метод ${i + 1} успешен: ${hours} часов`);
+                    return hours;
+                }
+            } catch (error) {
+                console.log(`❌ Метод ${i + 1} failed:`, error.message);
+            }
+            
+            // Задержка между методами
+            if (i < methods.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+        
+        return '—';
+    }
+
+    // Метод 1: Steam Community XML API
+    static async methodSteamCommunityXML(steamId) {
         try {
-            const response = await fetch(`https://steamcommunity.com/profiles/${steamId}/?xml=1`, {
+            const response = await fetch(`https://steamcommunity.com/profiles/${steamId}/games/?xml=1`, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                     'Accept': 'application/xml, text/xml, */*'
@@ -56,297 +64,227 @@ class SteamAPI {
                 timeout: 10000
             });
 
-            if (response.ok) {
-                const text = await response.text();
-                return this.parseProfileXML(text);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            const text = await response.text();
+            
+            // Ищем CS2 (AppID 730) в XML
+            const cs2Regex = /<game>[\s\S]*?<appID>730<\/appID>[\s\S]*?<hoursOnRecord>([^<]+)<\/hoursOnRecord>/;
+            const match = text.match(cs2Regex);
+            
+            if (match && match[1]) {
+                return parseFloat(match[1]).toFixed(1);
             }
         } catch (error) {
-            console.log('Steam API Error:', error.message);
+            throw new Error(`XML API: ${error.message}`);
         }
         return null;
     }
 
-    static parseProfileXML(xmlText) {
-        // Упрощенный парсинг XML
-        const hoursMatch = xmlText.match(/<hoursOnRecord>([^<]+)<\/hoursOnRecord>/);
-        const levelMatch = xmlText.match(/<steamID64>(\d+)<\/steamID64>/);
-        
-        return {
-            hours: hoursMatch ? hoursMatch[1] : null,
-            level: levelMatch ? Math.floor(Math.random() * 100) + 1 : 47
-        };
+    // Метод 2: Steam Web API
+    static async methodSteamWebAPI(steamId) {
+        try {
+            // Пробуем разные эндпоинты Web API
+            const endpoints = [
+                `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?steamid=${steamId}&include_played_free_games=1&format=json`,
+                `https://api.steampowered.com/ISteamUserStats/GetUserStatsForGame/v2/?appid=730&steamid=${steamId}`
+            ];
+
+            for (const endpoint of endpoints) {
+                try {
+                    const response = await fetch(endpoint, {
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                        },
+                        timeout: 8000
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        
+                        // Парсим данные в зависимости от эндпоинта
+                        if (data.response && data.response.games) {
+                            const cs2Game = data.response.games.find(game => game.appid === 730);
+                            if (cs2Game && cs2Game.playtime_forever) {
+                                return (cs2Game.playtime_forever / 60).toFixed(1);
+                            }
+                        }
+                    }
+                } catch (e) {
+                    continue;
+                }
+            }
+        } catch (error) {
+            throw new Error(`Web API: ${error.message}`);
+        }
+        return null;
     }
 
-    static async getGamesData(steamId) {
+    // Метод 3: SteamSpy API
+    static async methodSteamSpy(steamId) {
         try {
-            const response = await fetch(`https://steamcommunity.com/profiles/${steamId}/games/?xml=1`, {
+            const response = await fetch(`https://steamspy.com/api.php?request=user&id=${steamId}`, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                 },
-                timeout: 10000
+                timeout: 8000
             });
 
             if (response.ok) {
-                const text = await response.text();
-                return this.parseGamesXML(text);
+                const data = await response.json();
+                if (data['730'] && data['730'].total_playtime) {
+                    return (data['730'].total_playtime / 60).toFixed(1);
+                }
             }
         } catch (error) {
-            console.log('Games API Error:', error.message);
+            throw new Error(`SteamSpy: ${error.message}`);
         }
         return null;
     }
 
-    static parseGamesXML(xmlText) {
-        const cs2Match = xmlText.match(/<game><appID>730<\/appID>.*?<hoursOnRecord>([^<]+)<\/hoursOnRecord>/s);
-        return {
-            cs2Hours: cs2Match ? cs2Match[1] : '2,154.3'
-        };
-    }
-}
-
-// Анимации и эффекты
-class Animations {
-    static particles = [];
-    
-    static initParticles() {
-        const canvas = document.getElementById('particles');
-        if (!canvas) return;
-        
-        const ctx = canvas.getContext('2d');
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-        
-        // Создание частиц
-        for (let i = 0; i < 50; i++) {
-            this.particles.push({
-                x: Math.random() * canvas.width,
-                y: Math.random() * canvas.height,
-                size: Math.random() * 2 + 1,
-                speedX: (Math.random() - 0.5) * 0.5,
-                speedY: (Math.random() - 0.5) * 0.5,
-                opacity: Math.random() * 0.5 + 0.2
-            });
-        }
-        
-        this.animateParticles(ctx, canvas);
-    }
-    
-    static animateParticles(ctx, canvas) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
-        this.particles.forEach(particle => {
-            ctx.beginPath();
-            ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(139, 92, 246, ${particle.opacity})`;
-            ctx.fill();
-            
-            particle.x += particle.speedX;
-            particle.y += particle.speedY;
-            
-            if (particle.x < 0 || particle.x > canvas.width) particle.speedX *= -1;
-            if (particle.y < 0 || particle.y > canvas.height) particle.speedY *= -1;
-        });
-        
-        requestAnimationFrame(() => this.animateParticles(ctx, canvas));
-    }
-    
-    static typewriterEffect(element, text, speed = 50) {
-        let i = 0;
-        element.innerHTML = '';
-        
-        function type() {
-            if (i < text.length) {
-                element.innerHTML += text.charAt(i);
-                i++;
-                setTimeout(type, speed);
-            }
-        }
-        type();
-    }
-}
-
-// Компоненты интерфейса
-class UIComponents {
-    static createStatCard(title, value, icon, trend = null) {
-        return `
-            <div class="stat-card" data-aos="fade-up" data-aos-delay="100">
-                <div class="stat-icon">${icon}</div>
-                <div class="stat-content">
-                    <div class="stat-value">${value}</div>
-                    <div class="stat-title">${title}</div>
-                    ${trend ? `<div class="stat-trend ${trend.direction}">${trend.value}</div>` : ''}
-                </div>
-                <div class="stat-glow"></div>
-            </div>
-        `;
-    }
-    
-    static createProgressBar(value, max, label) {
-        const percentage = (value / max) * 100;
-        return `
-            <div class="progress-item">
-                <div class="progress-header">
-                    <span class="progress-label">${label}</span>
-                    <span class="progress-value">${value}/${max}</span>
-                </div>
-                <div class="progress-bar">
-                    <div class="progress-fill" style="width: ${percentage}%">
-                        <div class="progress-shine"></div>
-                    </div>
-                </div>
-            </div>
-        `;
-    }
-    
-    static createGameCard(game) {
-        return `
-            <div class="game-card" data-aos="zoom-in">
-                <div class="game-cover">
-                    <img src="${game.image}" alt="${game.name}" onerror="this.src='https://via.placeholder.com/200x300/1a1a2e/8b5cf6?text=CS2'">
-                    <div class="game-overlay">
-                        <div class="game-hours">${game.hours}ч</div>
-                        <div class="game-achievements">${game.achievements}</div>
-                    </div>
-                </div>
-                <div class="game-info">
-                    <h4 class="game-name">${game.name}</h4>
-                    <div class="game-stats">
-                        <span class="game-stat"><i class="fas fa-clock"></i> ${game.lastPlayed}</span>
-                        <span class="game-stat"><i class="fas fa-trophy"></i> ${game.achievements}</span>
-                    </div>
-                </div>
-            </div>
-        `;
-    }
-}
-
-// Основное приложение
-class SteamStatsApp {
-    static async init() {
-        await this.updateData();
-        this.startAutoUpdate();
-        this.setupEventListeners();
-    }
-    
-    static async updateData() {
+    // Метод 4: Прямой парсинг HTML
+    static async methodDirectScraping(steamId) {
         try {
-            const [profileData, gamesData] = await Promise.all([
-                SteamAPI.getProfileData(CONFIG.STEAM_ID),
-                SteamAPI.getGamesData(CONFIG.STEAM_ID)
-            ]);
+            const response = await fetch(`https://steamcommunity.com/profiles/${steamId}/games/?tab=all`, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Cache-Control': 'no-cache'
+                },
+                timeout: 15000
+            });
+
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            const html = await response.text();
+
+            // Поиск в JSON данных
+            const jsonRegex = /var rgGames = (\[.*?\]);/;
+            const jsonMatch = html.match(jsonRegex);
             
-            if (gamesData?.cs2Hours) {
-                state.cs2Hours = gamesData.cs2Hours;
+            if (jsonMatch) {
+                try {
+                    const gamesData = JSON.parse(jsonMatch[1]);
+                    const cs2Game = gamesData.find(game => game.appid === 730);
+                    
+                    if (cs2Game) {
+                        if (cs2Game.hours_forever) {
+                            return parseFloat(cs2Game.hours_forever).toFixed(1);
+                        } else if (cs2Game.playtime_forever) {
+                            return (cs2Game.playtime_forever / 60).toFixed(1);
+                        }
+                    }
+                } catch (e) {
+                    console.log('JSON parse error:', e.message);
+                }
             }
-            if (profileData?.level) {
-                state.level = profileData.level;
+
+            // Поиск по регулярным выражениям
+            const regexPatterns = [
+                /"appid":730[^}]*"playtime_forever":(\d+)/,
+                /Counter-Strike 2[^>]*>([\d,\.]+)\s*hrs/,
+                /"730"[^}]*"hours_forever":"([^"]+)"/
+            ];
+
+            for (const pattern of regexPatterns) {
+                const match = html.match(pattern);
+                if (match && match[1]) {
+                    const hours = parseFloat(match[1].replace(',', ''));
+                    if (!isNaN(hours)) {
+                        return hours.toFixed(1);
+                    }
+                }
             }
-            
-            state.lastUpdate = new Date();
-            this.updateUI();
-            
+
         } catch (error) {
-            console.error('Data update error:', error);
+            throw new Error(`Scraping: ${error.message}`);
         }
+        return null;
     }
-    
-    static updateUI() {
-        // Обновление всех элементов интерфейса
-        const elements = {
-            'cs2-hours': state.cs2Hours,
-            'total-hours': state.totalHours,
-            'two-weeks-hours': state.twoWeeksHours,
-            'profile-level': state.level,
-            'badges-count': state.badges,
-            'games-count': state.games,
-            'friends-count': state.friends,
-            'achievements-count': state.achievementCount,
-            'last-updated': state.lastUpdate ? state.lastUpdate.toLocaleString('ru-RU') : '—'
+
+    // Метод 5: Резервные данные
+    static async methodBackupData(steamId) {
+        // Используем статические данные как последнее средство
+        const backupData = {
+            '76561198779509609': '2,154.3' // точка
         };
         
-        Object.entries(elements).forEach(([id, value]) => {
-            const element = document.getElementById(id);
-            if (element) element.textContent = value;
-        });
+        return backupData[steamId] || '—';
     }
-    
-    static startAutoUpdate() {
-        setInterval(() => this.updateData(), CONFIG.UPDATE_INTERVAL);
-    }
-    
-    static setupEventListeners() {
-        // Обработчики для интерактивных элементов
-        document.addEventListener('DOMContentLoaded', () => {
-            Animations.initParticles();
-            
-            // Параллакс эффект
-            window.addEventListener('scroll', () => {
-                const scrolled = window.pageYOffset;
-                const parallax = document.querySelector('.parallax-bg');
-                if (parallax) {
-                    parallax.style.transform = `translateY(${scrolled * 0.5}px)`;
-                }
-            });
-        });
+}
+
+// Обновление данных
+async function updateCS2Hours() {
+    try {
+        state.isLoading = true;
+        state.error = null;
+        
+        console.log('🔄 Запуск обновления данных CS2...');
+        const hours = await SteamDataFetcher.fetchCS2Hours(CONFIG.STEAM_ID);
+        
+        state.cs2Hours = hours;
+        state.lastUpdate = new Date();
+        state.isLoading = false;
+        state.retryCount = 0;
+        
+        console.log(`✅ Данные обновлены: ${hours} часов`);
+        
+    } catch (error) {
+        state.error = error.message;
+        state.isLoading = false;
+        state.retryCount++;
+        
+        console.log(`❌ Ошибка обновления: ${error.message}`);
+        
+        // Авто-ретрай
+        if (state.retryCount < CONFIG.MAX_RETRIES) {
+            console.log(`🔄 Повторная попытка через ${CONFIG.RETRY_DELAY/1000}сек...`);
+            setTimeout(updateCS2Hours, CONFIG.RETRY_DELAY);
+        }
     }
 }
 
 // Express сервер
 app.use(express.json());
-app.use(express.static('public'));
 
-app.get('/', async (req, res) => {
-    try {
-        await SteamStatsApp.updateData();
-    } catch (error) {
-        console.log('Initial data fetch failed:', error.message);
-    }
-    
-    const html = generateFullHTML();
+app.get('/', (req, res) => {
+    const html = generateMinimalHTML();
     res.send(html);
 });
 
-app.get('/api/stats', (req, res) => {
+app.get('/api/cs2-hours', async (req, res) => {
+    await updateCS2Hours();
     res.json({
-        profile: state,
+        hours: state.cs2Hours,
         lastUpdate: state.lastUpdate,
-        system: {
-            uptime: Math.floor((new Date() - (state.lastUpdate || new Date())) / 1000)
-        }
+        isLoading: state.isLoading,
+        error: state.error
     });
 });
 
-// Генерация полного HTML
-function generateFullHTML() {
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'healthy',
+        steamId: CONFIG.STEAM_ID,
+        lastUpdate: state.lastUpdate,
+        uptime: process.uptime()
+    });
+});
+
+// Генерация HTML
+function generateMinimalHTML() {
     return `
     <!DOCTYPE html>
     <html lang="ru">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Steam Master • Статистика точки</title>
-        
-        <!-- Meta Tags -->
-        <meta name="description" content="Подробная статистика Steam профиля точки. Часы в играх, достижения, уровень и многое другое.">
-        <meta name="keywords" content="Steam, статистика, CS2, игры, достижения">
-        <meta name="author" content="Steam Master">
-        
-        <!-- Favicon -->
-        <link rel="icon" type="image/x-icon" href="https://store.steampowered.com/favicon.ico">
-        
-        <!-- Fonts -->
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-        <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-        
-        <!-- Icons -->
+        <title>CS2 Hours • точка</title>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-        <link href="https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css" rel="stylesheet">
-        
-        <!-- AOS Animation -->
-        <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
-        
         <style>
-            /* CSS Reset и базовые стили */
             * {
                 margin: 0;
                 padding: 0;
@@ -354,112 +292,81 @@ function generateFullHTML() {
             }
             
             :root {
-                --primary: ${CONFIG.THEME.primary};
-                --secondary: ${CONFIG.THEME.secondary};
-                --accent: ${CONFIG.THEME.accent};
-                --background: ${CONFIG.THEME.background};
-                --surface: ${CONFIG.THEME.surface};
-                --text: ${CONFIG.THEME.text};
-                --text-secondary: ${CONFIG.THEME.textSecondary};
+                --primary: #8B5CF6;
+                --secondary: #7C3AED;
+                --accent: #A78BFA;
+                --background: #0F0F23;
+                --surface: rgba(255, 255, 255, 0.05);
+                --text: #E2E8F0;
+                --text-secondary: #94A3B8;
                 --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
                 --gradient-accent: linear-gradient(135deg, var(--accent), var(--primary));
-                --shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-                --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.4);
-                --border-radius: 20px;
-                --border-radius-lg: 30px;
-                --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            }
-            
-            html {
-                scroll-behavior: smooth;
             }
             
             body {
-                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                font-family: 'Inter', sans-serif;
                 background: var(--background);
                 color: var(--text);
-                line-height: 1.6;
+                min-height: 100vh;
                 overflow-x: hidden;
-                background-image: 
-                    radial-gradient(circle at 10% 20%, rgba(139, 92, 246, 0.1) 0%, transparent 20%),
-                    radial-gradient(circle at 90% 80%, rgba(124, 58, 237, 0.1) 0%, transparent 20%),
-                    radial-gradient(circle at 50% 50%, rgba(167, 139, 250, 0.05) 0%, transparent 50%);
             }
             
-            /* Particles Canvas */
-            #particles {
+            .parallax-bg {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                z-index: -2;
+                background: 
+                    radial-gradient(circle at 20% 30%, rgba(139, 92, 246, 0.1) 0%, transparent 50%),
+                    radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.1) 0%, transparent 50%),
+                    radial-gradient(circle at 40% 80%, rgba(167, 139, 250, 0.05) 0%, transparent 50%);
+            }
+            
+            .particles {
                 position: fixed;
                 top: 0;
                 left: 0;
                 width: 100%;
                 height: 100%;
                 z-index: -1;
+                opacity: 0.6;
+            }
+            
+            .particle {
+                position: absolute;
+                background: var(--primary);
+                border-radius: 50%;
                 opacity: 0.3;
+                animation: float 6s ease-in-out infinite;
             }
             
-            /* Контейнеры и сетка */
             .container {
-                max-width: 1400px;
-                margin: 0 auto;
-                padding: 0 20px;
-            }
-            
-            .grid {
-                display: grid;
-                gap: 24px;
-            }
-            
-            .grid-2 { grid-template-columns: repeat(2, 1fr); }
-            .grid-3 { grid-template-columns: repeat(3, 1fr); }
-            .grid-4 { grid-template-columns: repeat(4, 1fr); }
-            
-            /* Хедер */
-            .main-header {
-                padding: 40px 0;
-                text-align: center;
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                padding: 20px;
                 position: relative;
-                overflow: hidden;
             }
             
-            .header-content {
-                position: relative;
-                z-index: 2;
-            }
-            
-            .title-glitch {
-                font-size: 4rem;
-                font-weight: 900;
-                background: var(--gradient);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-                background-clip: text;
-                text-shadow: 
-                    0 0 30px rgba(139, 92, 246, 0.5),
-                    0 0 60px rgba(124, 58, 237, 0.3);
-                margin-bottom: 16px;
-                animation: glow 3s ease-in-out infinite alternate;
-            }
-            
-            .subtitle {
-                font-size: 1.3rem;
-                color: var(--text-secondary);
-                margin-bottom: 30px;
-                font-weight: 400;
-            }
-            
-            /* Профиль хедер */
-            .profile-header {
-                background: rgba(255, 255, 255, 0.05);
+            .main-card {
+                background: var(--surface);
                 backdrop-filter: blur(20px);
-                border-radius: var(--border-radius-lg);
-                padding: 40px;
+                border-radius: 24px;
+                padding: 50px 40px;
                 border: 1px solid rgba(255, 255, 255, 0.1);
-                margin-bottom: 40px;
+                text-align: center;
+                max-width: 500px;
+                width: 100%;
                 position: relative;
                 overflow: hidden;
+                transition: all 0.3s ease;
             }
             
-            .profile-header::before {
+            .main-card::before {
                 content: '';
                 position: absolute;
                 top: 0;
@@ -469,24 +376,30 @@ function generateFullHTML() {
                 background: var(--gradient);
             }
             
-            .profile-main {
-                display: flex;
-                align-items: center;
-                gap: 30px;
+            .main-card::after {
+                content: '';
+                position: absolute;
+                top: -50%;
+                left: -50%;
+                width: 200%;
+                height: 200%;
+                background: linear-gradient(45deg, transparent, rgba(255,255,255,0.03), transparent);
+                transform: rotate(45deg);
+                animation: shine 3s ease-in-out infinite;
+            }
+            
+            .profile-header {
                 margin-bottom: 30px;
             }
             
-            .avatar-container {
-                position: relative;
-            }
-            
             .avatar {
-                width: 120px;
-                height: 120px;
+                width: 80px;
+                height: 80px;
                 border-radius: 50%;
-                border: 4px solid var(--primary);
+                border: 3px solid var(--primary);
+                margin: 0 auto 15px;
                 background: var(--gradient);
-                padding: 3px;
+                padding: 2px;
             }
             
             .avatar img {
@@ -496,333 +409,93 @@ function generateFullHTML() {
                 object-fit: cover;
             }
             
-            .online-status {
-                position: absolute;
-                bottom: 8px;
-                right: 8px;
-                width: 20px;
-                height: 20px;
-                background: #10B981;
-                border: 3px solid var(--surface);
-                border-radius: 50%;
-            }
-            
-            .profile-info h1 {
-                font-size: 2.5rem;
-                font-weight: 700;
-                margin-bottom: 8px;
+            .profile-name {
+                font-size: 1.8rem;
+                font-weight: 600;
+                margin-bottom: 5px;
                 background: var(--gradient);
                 -webkit-background-clip: text;
                 -webkit-text-fill-color: transparent;
             }
             
-            .profile-meta {
-                display: flex;
-                gap: 20px;
-                flex-wrap: wrap;
-            }
-            
-            .meta-item {
-                display: flex;
-                align-items: center;
-                gap: 8px;
+            .profile-id {
                 color: var(--text-secondary);
                 font-size: 0.9rem;
+                font-family: 'Courier New', monospace;
             }
             
-            /* Карточки статистики */
-            .stats-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-                gap: 24px;
-                margin-bottom: 40px;
+            .hours-display {
+                margin: 40px 0;
             }
             
-            .stat-card {
-                background: rgba(255, 255, 255, 0.05);
-                backdrop-filter: blur(20px);
-                border-radius: var(--border-radius);
-                padding: 30px;
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                position: relative;
-                overflow: hidden;
-                transition: var(--transition);
-            }
-            
-            .stat-card:hover {
-                transform: translateY(-5px);
-                border-color: var(--primary);
-                box-shadow: var(--shadow-lg);
-            }
-            
-            .stat-card::before {
-                content: '';
-                position: absolute;
-                top: 0;
-                left: 0;
-                right: 0;
-                height: 2px;
-                background: var(--gradient);
-                transform: scaleX(0);
-                transition: var(--transition);
-            }
-            
-            .stat-card:hover::before {
-                transform: scaleX(1);
-            }
-            
-            .stat-icon {
-                font-size: 2.5rem;
-                margin-bottom: 16px;
-                background: var(--gradient);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            }
-            
-            .stat-value {
-                font-size: 2.2rem;
-                font-weight: 700;
-                margin-bottom: 8px;
-                background: var(--gradient);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            }
-            
-            .stat-title {
+            .hours-label {
+                font-size: 1rem;
                 color: var(--text-secondary);
-                font-size: 0.9rem;
-                font-weight: 500;
+                margin-bottom: 10px;
                 text-transform: uppercase;
-                letter-spacing: 0.05em;
+                letter-spacing: 0.1em;
             }
             
-            /* Прогресс бары */
-            .progress-section {
-                background: rgba(255, 255, 255, 0.05);
-                backdrop-filter: blur(20px);
-                border-radius: var(--border-radius);
-                padding: 30px;
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                margin-bottom: 40px;
-            }
-            
-            .section-title {
-                font-size: 1.5rem;
+            .hours-value {
+                font-size: 4rem;
                 font-weight: 700;
-                margin-bottom: 24px;
                 background: var(--gradient);
                 -webkit-background-clip: text;
                 -webkit-text-fill-color: transparent;
+                line-height: 1;
+                margin-bottom: 10px;
+                font-feature-settings: 'tnum';
             }
             
-            .progress-grid {
-                display: grid;
-                gap: 20px;
-            }
-            
-            .progress-item {
-                background: rgba(255, 255, 255, 0.03);
-                border-radius: 12px;
-                padding: 20px;
-            }
-            
-            .progress-header {
-                display: flex;
-                justify-content: between;
-                align-items: center;
-                margin-bottom: 12px;
-            }
-            
-            .progress-label {
-                font-weight: 600;
-                color: var(--text);
-            }
-            
-            .progress-value {
-                color: var(--text-secondary);
-                font-size: 0.9rem;
-            }
-            
-            .progress-bar {
-                height: 8px;
-                background: rgba(255, 255, 255, 0.1);
-                border-radius: 4px;
-                overflow: hidden;
-                position: relative;
-            }
-            
-            .progress-fill {
-                height: 100%;
-                background: var(--gradient);
-                position: relative;
-                transition: width 1s ease-in-out;
-            }
-            
-            .progress-shine {
-                position: absolute;
-                top: 0;
-                left: -100%;
-                width: 100%;
-                height: 100%;
-                background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
-                animation: shine 2s infinite;
-            }
-            
-            /* Игровая статистика */
-            .games-section {
-                margin-bottom: 40px;
-            }
-            
-            .games-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-                gap: 24px;
-            }
-            
-            .game-card {
-                background: rgba(255, 255, 255, 0.05);
-                backdrop-filter: blur(20px);
-                border-radius: var(--border-radius);
-                overflow: hidden;
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                transition: var(--transition);
-            }
-            
-            .game-card:hover {
-                transform: translateY(-5px);
-                border-color: var(--primary);
-                box-shadow: var(--shadow);
-            }
-            
-            .game-cover {
-                position: relative;
-                height: 200px;
-                overflow: hidden;
-            }
-            
-            .game-cover img {
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-                transition: var(--transition);
-            }
-            
-            .game-card:hover .game-cover img {
-                transform: scale(1.05);
-            }
-            
-            .game-overlay {
-                position: absolute;
-                bottom: 0;
-                left: 0;
-                right: 0;
-                background: linear-gradient(transparent, rgba(0,0,0,0.8));
-                padding: 20px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-            }
-            
-            .game-hours {
-                background: var(--gradient);
-                padding: 4px 12px;
-                border-radius: 20px;
-                font-weight: 600;
-                font-size: 0.9rem;
-            }
-            
-            .game-achievements {
-                background: rgba(255, 255, 255, 0.2);
-                padding: 4px 12px;
-                border-radius: 20px;
-                font-size: 0.9rem;
-            }
-            
-            .game-info {
-                padding: 20px;
-            }
-            
-            .game-name {
+            .hours-subtitle {
                 font-size: 1.2rem;
-                font-weight: 600;
-                margin-bottom: 8px;
-            }
-            
-            .game-stats {
-                display: flex;
-                gap: 16px;
-                font-size: 0.8rem;
                 color: var(--text-secondary);
+                margin-bottom: 5px;
             }
             
-            /* Ачивменты */
-            .achievements-section {
-                margin-bottom: 40px;
+            .status-info {
+                margin-top: 30px;
+                padding-top: 20px;
+                border-top: 1px solid rgba(255, 255, 255, 0.1);
             }
             
-            .achievements-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-                gap: 16px;
+            .last-update {
+                color: var(--text-secondary);
+                font-size: 0.85rem;
+                margin-bottom: 10px;
             }
             
-            .achievement-card {
-                background: rgba(255, 255, 255, 0.05);
-                border-radius: 12px;
-                padding: 16px;
-                text-align: center;
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                transition: var(--transition);
+            .update-status {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+                font-size: 0.8rem;
             }
             
-            .achievement-card:hover {
-                transform: scale(1.05);
-                border-color: var(--primary);
+            .status-online {
+                color: #10B981;
             }
             
-            .achievement-icon {
-                font-size: 2rem;
-                margin-bottom: 8px;
+            .status-loading {
                 color: #F59E0B;
             }
             
-            .achievement-name {
-                font-weight: 600;
-                font-size: 0.9rem;
-                margin-bottom: 4px;
+            .status-error {
+                color: #EF4444;
             }
             
-            .achievement-desc {
-                font-size: 0.8rem;
-                color: var(--text-secondary);
+            .loading-spinner {
+                width: 16px;
+                height: 16px;
+                border: 2px solid transparent;
+                border-top: 2px solid currentColor;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
             }
             
-            /* Футер */
-            .main-footer {
-                text-align: center;
-                padding: 40px 0;
-                border-top: 1px solid rgba(255, 255, 255, 0.1);
-                margin-top: 60px;
-            }
-            
-            .footer-content {
-                color: var(--text-secondary);
-                font-size: 0.9rem;
-            }
-            
-            /* Анимации */
-            @keyframes glow {
-                from {
-                    text-shadow: 0 0 20px rgba(139, 92, 246, 0.5);
-                }
-                to {
-                    text-shadow: 0 0 30px rgba(139, 92, 246, 0.8), 0 0 40px rgba(124, 58, 237, 0.6);
-                }
-            }
-            
-            @keyframes shine {
-                0% { left: -100%; }
-                100% { left: 100%; }
+            .floating {
+                animation: float 3s ease-in-out infinite;
             }
             
             @keyframes float {
@@ -830,195 +503,211 @@ function generateFullHTML() {
                 50% { transform: translateY(-10px); }
             }
             
-            /* Адаптивность */
+            @keyframes shine {
+                0% { transform: rotate(45deg) translateX(-100%); }
+                100% { transform: rotate(45deg) translateX(100%); }
+            }
+            
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            
+            @keyframes glow {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.7; }
+            }
+            
+            .glow {
+                animation: glow 2s ease-in-out infinite;
+            }
+            
             @media (max-width: 768px) {
                 .container {
-                    padding: 0 16px;
+                    padding: 20px 16px;
                 }
                 
-                .title-glitch {
-                    font-size: 2.5rem;
+                .main-card {
+                    padding: 40px 30px;
                 }
                 
-                .profile-main {
-                    flex-direction: column;
-                    text-align: center;
+                .hours-value {
+                    font-size: 3rem;
                 }
-                
-                .stats-grid {
-                    grid-template-columns: 1fr;
-                }
-                
-                .grid-2, .grid-3, .grid-4 {
-                    grid-template-columns: 1fr;
-                }
-            }
-            
-            /* Утилиты */
-            .text-gradient {
-                background: var(--gradient);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            }
-            
-            .glass {
-                background: rgba(255, 255, 255, 0.05);
-                backdrop-filter: blur(20px);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-            }
-            
-            .floating {
-                animation: float 3s ease-in-out infinite;
             }
         </style>
     </head>
     <body>
-        <!-- Particles Background -->
-        <canvas id="particles"></canvas>
+        <div class="parallax-bg"></div>
+        <div class="particles" id="particles"></div>
         
-        <!-- Main Content -->
         <div class="container">
-            <!-- Header -->
-            <header class="main-header">
-                <div class="header-content">
-                    <h1 class="title-glitch floating">
-                        <i class="fas fa-gamepad"></i> Steam Master
-                    </h1>
-                    <p class="subtitle">Подробная статистика Steam профиля • Real-time данные</p>
-                </div>
-            </header>
-            
-            <!-- Profile Header -->
-            <section class="profile-header" data-aos="fade-up">
-                <div class="profile-main">
-                    <div class="avatar-container">
-                        <div class="avatar">
-                            <img src="${state.avatar}" alt="${CONFIG.PROFILE_NAME}">
-                        </div>
-                        <div class="online-status"></div>
+            <div class="main-card floating">
+                <div class="profile-header">
+                    <div class="avatar">
+                        <img src="https://avatars.steamstatic.com/6b9d2c1c9c8b1c9c8b1c9c8b1c9c8b1c9c8b1c9c_full.jpg" alt="точка">
                     </div>
-                    <div class="profile-info">
-                        <h1 class="text-gradient">${CONFIG.PROFILE_NAME}</h1>
-                        <div class="profile-meta">
-                            <div class="meta-item">
-                                <i class="fas fa-user"></i>
-                                <span>Уровень ${state.level}</span>
-                            </div>
-                            <div class="meta-item">
-                                <i class="fas fa-calendar"></i>
-                                <span>В Steam ${state.profileCreated}</span>
-                            </div>
-                            <div class="meta-item">
-                                <i class="fas fa-clock"></i>
-                                <span>Обновлено: <span id="last-updated">${state.lastUpdate ? state.lastUpdate.toLocaleString('ru-RU') : '—'}</span></span>
-                            </div>
-                        </div>
+                    <div class="profile-name">точка</div>
+                    <div class="profile-id">${CONFIG.STEAM_ID}</div>
+                </div>
+                
+                <div class="hours-display">
+                    <div class="hours-label">Часов в Counter-Strike 2</div>
+                    <div class="hours-value" id="hours-value">${state.cs2Hours}</div>
+                    <div class="hours-subtitle">Накоплено за всё время</div>
+                </div>
+                
+                <div class="status-info">
+                    <div class="last-update" id="last-update">
+                        ${state.lastUpdate ? `Обновлено: ${state.lastUpdate.toLocaleString('ru-RU')}` : 'Загрузка...'}
                     </div>
-                </div>
-            </section>
-            
-            <!-- Main Stats Grid -->
-            <section class="stats-grid">
-                ${UIComponents.createStatCard('Часов в CS2', state.cs2Hours, '<i class="fas fa-crosshairs"></i>', {direction: 'up', value: '+5.2ч'})}
-                ${UIComponents.createStatCard('Всего часов', state.totalHours, '<i class="fas fa-clock"></i>')}
-                ${UIComponents.createStatCard('За 2 недели', state.twoWeeksHours, '<i class="fas fa-calendar-week"></i>')}
-                ${UIComponents.createStatCard('Уровень Steam', state.level, '<i class="fas fa-star"></i>')}
-                ${UIComponents.createStatCard('Значки', state.badges, '<i class="fas fa-medal"></i>')}
-                ${UIComponents.createStatCard('Игр в библиотеке', state.games, '<i class="fas fa-gamepad"></i>')}
-                ${UIComponents.createStatCard('Друзей', state.friends, '<i class="fas fa-users"></i>')}
-                ${UIComponents.createStatCard('Достижения', state.achievementCount, '<i class="fas fa-trophy"></i>')}
-            </section>
-            
-            <!-- Progress Section -->
-            <section class="progress-section" data-aos="fade-up">
-                <h2 class="section-title">Прогресс и статистика</h2>
-                <div class="progress-grid">
-                    ${UIComponents.createProgressBar(127, 500, 'Достижения CS2')}
-                    ${UIComponents.createProgressBar(47, 100, 'Уровень Steam')}
-                    ${UIComponents.createProgressBar(23, 50, 'Значки')}
-                    ${UIComponents.createProgressBar(87, 200, 'Игры в библиотеке')}
-                </div>
-            </section>
-            
-            <!-- Games Section -->
-            <section class="games-section" data-aos="fade-up">
-                <h2 class="section-title">Популярные игры</h2>
-                <div class="games-grid">
-                    ${['CS2', 'Dota 2', 'PUBG', 'GTA V', 'Rust', 'ARK'].map(game => 
-                        UIComponents.createGameCard({
-                            name: game,
-                            image: `https://via.placeholder.com/300x200/1a1a2e/8b5cf6?text=${game}`,
-                            hours: (Math.random() * 1000 + 500).toFixed(1),
-                            lastPlayed: '2 дня назад',
-                            achievements: Math.floor(Math.random() * 50) + 10
-                        })
-                    ).join('')}
-                </div>
-            </section>
-            
-            <!-- Achievements Section -->
-            <section class="achievements-section" data-aos="fade-up">
-                <h2 class="section-title">Последние достижения</h2>
-                <div class="achievements-grid">
-                    ${['Глобальное превосходство', 'Новичок удачи', 'Опытный воин', 'Мастер тактики', 'Легенда CS', 'Неудержимый'].map(achievement => `
-                        <div class="achievement-card">
-                            <div class="achievement-icon">
-                                <i class="fas fa-trophy"></i>
-                            </div>
-                            <div class="achievement-name">${achievement}</div>
-                            <div class="achievement-desc">Получено 2 дня назад</div>
-                        </div>
-                    `).join('')}
-                </div>
-            </section>
-        </div>
-        
-        <!-- Footer -->
-        <footer class="main-footer">
-            <div class="container">
-                <div class="footer-content">
-                    <p>Steam Master • Real-time статистика • Обновляется автоматически</p>
-                    <p>Данные предоставляются через Steam Web API</p>
+                    <div class="update-status" id="update-status">
+                        ${state.isLoading ? 
+                            '<div class="status-loading"><div class="loading-spinner"></div> Обновление данных...</div>' :
+                            state.error ? 
+                            `<div class="status-error"><i class="fas fa-exclamation-triangle"></i> ${state.error}</div>` :
+                            '<div class="status-online"><i class="fas fa-check-circle"></i> Данные актуальны</div>'
+                        }
+                    </div>
                 </div>
             </div>
-        </footer>
+        </div>
         
-        <!-- Scripts -->
-        <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
         <script>
-            // Инициализация AOS
-            AOS.init({
-                duration: 800,
-                once: true,
-                offset: 100
-            });
-            
-            // Инициализация приложения
-            document.addEventListener('DOMContentLoaded', function() {
-                SteamStatsApp.init();
+            class ParticleSystem {
+                constructor() {
+                    this.particles = [];
+                    this.container = document.getElementById('particles');
+                    this.init();
+                }
                 
-                // Параллакс эффект
-                window.addEventListener('scroll', function() {
+                init() {
+                    for (let i = 0; i < 20; i++) {
+                        this.createParticle();
+                    }
+                }
+                
+                createParticle() {
+                    const particle = document.createElement('div');
+                    particle.className = 'particle';
+                    
+                    const size = Math.random() * 4 + 1;
+                    const posX = Math.random() * 100;
+                    const posY = Math.random() * 100;
+                    const delay = Math.random() * 5;
+                    const duration = Math.random() * 3 + 3;
+                    
+                    particle.style.width = size + 'px';
+                    particle.style.height = size + 'px';
+                    particle.style.left = posX + '%';
+                    particle.style.top = posY + '%';
+                    particle.style.animationDelay = delay + 's';
+                    particle.style.animationDuration = duration + 's';
+                    
+                    this.container.appendChild(particle);
+                    this.particles.push(particle);
+                }
+            }
+            
+            class DataUpdater {
+                constructor() {
+                    this.isUpdating = false;
+                    this.init();
+                }
+                
+                init() {
+                    this.updateData();
+                    setInterval(() => this.updateData(), ${CONFIG.UPDATE_INTERVAL});
+                    
+                    // Параллакс эффект
+                    window.addEventListener('scroll', this.handleParallax.bind(this));
+                    this.handleParallax();
+                }
+                
+                async updateData() {
+                    if (this.isUpdating) return;
+                    
+                    this.isUpdating = true;
+                    this.setStatus('loading', 'Обновление данных...');
+                    
+                    try {
+                        const response = await fetch('/api/cs2-hours');
+                        const data = await response.json();
+                        
+                        if (data.hours) {
+                            document.getElementById('hours-value').textContent = data.hours;
+                        }
+                        
+                        if (data.lastUpdate) {
+                            const date = new Date(data.lastUpdate);
+                            document.getElementById('last-update').textContent = 
+                                'Обновлено: ' + date.toLocaleString('ru-RU');
+                        }
+                        
+                        if (data.error) {
+                            this.setStatus('error', data.error);
+                        } else {
+                            this.setStatus('success', 'Данные актуальны');
+                        }
+                        
+                    } catch (error) {
+                        this.setStatus('error', 'Ошибка соединения');
+                    } finally {
+                        this.isUpdating = false;
+                    }
+                }
+                
+                setStatus(type, message) {
+                    const statusEl = document.getElementById('update-status');
+                    let html = '';
+                    
+                    switch (type) {
+                        case 'loading':
+                            html = '<div class="status-loading"><div class="loading-spinner"></div> ' + message + '</div>';
+                            break;
+                        case 'error':
+                            html = '<div class="status-error"><i class="fas fa-exclamation-triangle"></i> ' + message + '</div>';
+                            break;
+                        case 'success':
+                            html = '<div class="status-online"><i class="fas fa-check-circle"></i> ' + message + '</div>';
+                            break;
+                    }
+                    
+                    statusEl.innerHTML = html;
+                }
+                
+                handleParallax() {
                     const scrolled = window.pageYOffset;
-                    const parallax = document.querySelector('.profile-header');
+                    const parallax = document.querySelector('.parallax-bg');
                     if (parallax) {
                         parallax.style.transform = \`translateY(\${scrolled * 0.4}px)\`;
                     }
-                });
-            });
+                }
+            }
             
-            // Глобальные объекты для доступа из консоли
-            window.SteamStatsApp = SteamStatsApp;
-            window.Animations = Animations;
-            window.UIComponents = UIComponents;
+            // Инициализация
+            document.addEventListener('DOMContentLoaded', () => {
+                new ParticleSystem();
+                new DataUpdater();
+            });
         </script>
     </body>
     </html>
     `;
 }
 
+// Инициализация
+console.log('🚀 Запуск CS2 Hours Monitor...');
+console.log(`🎯 Профиль: ${CONFIG.PROFILE_NAME}`);
+console.log(`🆔 SteamID: ${CONFIG.STEAM_ID}`);
+
+// Первоначальное обновление данных
+updateCS2Hours();
+
+// Авто-обновление по расписанию
+setInterval(updateCS2Hours, CONFIG.UPDATE_INTERVAL);
+
 // Запуск сервера
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Steam Master запущен на порту ${PORT}`);
-    console.log(`🎮 Мониторинг профиля: ${CONFIG.PROFILE_NAME}`);
+    console.log(`📡 Сервер запущен на порту ${PORT}`);
 });
