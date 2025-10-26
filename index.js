@@ -53,20 +53,21 @@ app.use((req, res, next) => {
   next();
 });
 
-// Функция для получения реальных данных Steam
+// Функция для парсинга реальных данных Steam
 async function fetchRealSteamData() {
-  console.log('🔄 Запрос данных Steam...');
+  console.log('🔄 Парсинг реальных данных Steam...');
   
   for (let profile of steamProfiles) {
     try {
-      // Получаем данные профиля через Steam Community
-      const profileResponse = await fetch(`https://steamcommunity.com/profiles/${profile.steamId}?xml=1`);
-      const profileText = await profileResponse.text();
+      // Получаем HTML страницы профиля
+      const response = await fetch(profile.profileUrl);
+      const html = await response.text();
       
       // Парсим аватар
-      const avatarMatch = profileText.match(/<avatarFull><!\[CDATA\[([^\]]+)\]\]><\/avatarFull>/);
-      if (avatarMatch) {
-        profile.avatar = avatarMatch[1];
+      const avatarRegex = /<img src="([^"]+avatar[^"]+)"/g;
+      const avatarMatch = html.match(avatarRegex);
+      if (avatarMatch && avatarMatch[0]) {
+        profile.avatar = avatarMatch[0].replace('<img src="', '').replace('"', '');
       }
       
       // Для точки используем тот же аватар что у кинельки
@@ -74,28 +75,76 @@ async function fetchRealSteamData() {
         profile.avatar = steamProfiles[0].avatar;
       }
       
-      // Парсим часы в играх (упрощенно)
-      const hoursMatch = profileText.match(/<hoursOnRecord>([^<]+)<\/hoursOnRecord>/);
-      if (hoursMatch) {
-        profile.cs2Hours = parseFloat(hoursMatch[1]).toFixed(1);
-      } else {
-        profile.cs2Hours = (Math.random() * 500 + 100).toFixed(1);
+      // Парсим часы в CS2 (Counter-Strike 2)
+      const cs2HoursRegex = /"hours":"([^"]+)","hours_forever":"([^"]+)"/g;
+      let cs2Match;
+      let cs2Hours = '0';
+      
+      while ((cs2Match = cs2HoursRegex.exec(html)) !== null) {
+        // Ищем именно CS2 (AppID 730)
+        if (html.includes('"appid":730') || html.includes('Counter-Strike 2')) {
+          cs2Hours = cs2Match[2] || cs2Match[1]; // hours_forever или hours
+          break;
+        }
       }
       
-      // Часы за 2 недели (имитация)
-      profile.twoWeeksHours = (Math.random() * 40 + 5).toFixed(1);
-      profile.lastUpdate = new Date();
+      // Если не нашли через regex, ищем в тексте
+      if (cs2Hours === '0') {
+        const cs2TextRegex = /Counter-Strike 2[^>]*>([^<]+) hrs/g;
+        const cs2TextMatch = cs2TextRegex.exec(html);
+        if (cs2TextMatch) {
+          cs2Hours = cs2TextMatch[1];
+        }
+      }
       
-      addLog(`✅ Данные ${profile.name} обновлены`);
+      profile.cs2Hours = cs2Hours !== '0' ? parseFloat(cs2Hours).toFixed(1) : '—';
+      
+      // Парсим часы за 2 недели (ищем в статистике)
+      const twoWeeksRegex = /([0-9.]+)\s*hrs\s*last\s*2\s*weeks/gi;
+      const twoWeeksMatch = twoWeeksRegex.exec(html);
+      if (twoWeeksMatch) {
+        profile.twoWeeksHours = parseFloat(twoWeeksMatch[1]).toFixed(1);
+      } else {
+        // Альтернативный поиск
+        const recentHoursRegex = /"recent_playtime":([0-9]+)/g;
+        const recentMatch = recentHoursRegex.exec(html);
+        if (recentMatch) {
+          profile.twoWeeksHours = (parseInt(recentMatch[1]) / 60).toFixed(1); // минуты в часы
+        } else {
+          profile.twoWeeksHours = '—';
+        }
+      }
+      
+      profile.lastUpdate = new Date();
+      addLog(`✅ ${profile.name}: CS2 ${profile.cs2Hours}ч, 2нед ${profile.twoWeeksHours}ч`);
       
     } catch (error) {
-      addLog(`❌ Ошибка ${profile.name}: ${error.message}`);
+      addLog(`❌ Ошибка парсинга ${profile.name}: ${error.message}`);
       
-      // Fallback данные
-      profile.cs2Hours = (Math.random() * 500 + 100).toFixed(1);
-      profile.twoWeeksHours = (Math.random() * 40 + 5).toFixed(1);
-      profile.lastUpdate = new Date();
+      // Fallback: пробуем Steam API
+      await fetchSteamAPIData(profile);
     }
+  }
+}
+
+// Резервный метод через Steam API
+async function fetchSteamAPIData(profile) {
+  try {
+    // Пробуем получить данные через неофициальные методы
+    const gamesResponse = await fetch(`${profile.profileUrl}/games?tab=all`);
+    const gamesHtml = await gamesResponse.text();
+    
+    // Упрощенный парсинг для CS2
+    if (gamesHtml.includes('Counter-Strike 2')) {
+      const cs2Regex = /Counter-Strike 2[^>]*>([0-9.]+)\s*hrs/g;
+      const cs2Match = cs2Regex.exec(gamesHtml);
+      if (cs2Match) {
+        profile.cs2Hours = parseFloat(cs2Match[1]).toFixed(1);
+      }
+    }
+    
+  } catch (apiError) {
+    addLog(`❌ Steam API fallback failed for ${profile.name}`);
   }
 }
 
@@ -314,7 +363,7 @@ app.get('/', (req, res) => {
         <div class="container">
             <div class="header">
                 <h1>Steam Statistics</h1>
-                <p>Реальное время • Автоматическое обновление</p>
+                <p>Реальные данные из Steam профилей</p>
             </div>
             
             <div class="nav">
@@ -359,7 +408,7 @@ app.get('/', (req, res) => {
             </div>
             
             <div class="status-bar">
-                <span id="update-status">🔄 Авто-обновление каждую минуту</span>
+                <span id="update-status">🔄 Парсинг реальных данных из Steam</span>
             </div>
             
             <div class="footer">
@@ -412,7 +461,7 @@ app.get('/', (req, res) => {
   res.send(html);
 });
 
-// Страница логов
+// Страница логов (остается без изменений)
 app.get('/logs', (req, res) => {
   const html = `
     <!DOCTYPE html>
@@ -671,7 +720,7 @@ fetchRealSteamData();
 // Запуск сервера
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Сервер запущен на порту ${PORT}`);
-  console.log(`🎨 Идеальный дизайн активирован`);
+  console.log(`🎯 Реальный парсинг Steam данных активирован`);
   console.log(`⏰ Время запуска: ${new Date().toLocaleString('ru-RU')}`);
 });
 
