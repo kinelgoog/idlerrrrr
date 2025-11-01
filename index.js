@@ -8,19 +8,19 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 // 🔐 Конфигурация безопасности
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'default-key-change-in-production';
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'default-key-change-in-production-32-chars!!';
 const DATA_FILE = './accounts.json';
 
-// 🎯 Предустановленные аккаунты (зашифрованные)
+// 🎯 Предустановленные аккаунты
 const DEFAULT_ACCOUNTS = {
     'acc_1': {
         id: 'acc_1',
-        username: encrypt('tochka_bi_laik'),
-        password: encrypt('JenyaKinel2023steam'),
+        username: 'tochka_bi_laik',
+        password: 'JenyaKinel2023steam',
         displayName: 'точка',
         steamId: '1',
         games: '730',
-        sharedSecret: '', // Для Steam Guard Mobile
+        sharedSecret: '',
         guardType: 'none',
         farmedHours: '0.0',
         farmStatus: 'stopped',
@@ -28,12 +28,12 @@ const DEFAULT_ACCOUNTS = {
     },
     'acc_2': {
         id: 'acc_2',
-        username: encrypt('k1nelsteam'),
-        password: encrypt('JenyaKinel2023steam'),
+        username: 'k1nelsteam', 
+        password: 'JenyaKinel2023steam',
         displayName: 'кинелька',
         steamId: '2',
         games: '730',
-        sharedSecret: '', // Добавить при настройке
+        sharedSecret: '',
         guardType: 'SGM',
         farmedHours: '0.0',
         farmStatus: 'stopped',
@@ -41,18 +41,45 @@ const DEFAULT_ACCOUNTS = {
     }
 };
 
-// 🔒 Функции шифрования
+// 🔒 Функции шифрования (современные)
 function encrypt(text) {
-    const cipher = crypto.createCipher('aes-256-gcm', ENCRYPTION_KEY);
-    return cipher.update(text, 'utf8', 'hex') + cipher.final('hex');
+    try {
+        const iv = crypto.randomBytes(16);
+        const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32);
+        const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+        let encrypted = cipher.update(text, 'utf8', 'hex');
+        encrypted += cipher.final('hex');
+        const authTag = cipher.getAuthTag();
+        return `encrypted:${iv.toString('hex')}:${encrypted}:${authTag.toString('hex')}`;
+    } catch (error) {
+        console.log('❌ Ошибка шифрования:', error.message);
+        return text;
+    }
 }
 
-function decrypt(encrypted) {
+function decrypt(encryptedText) {
     try {
-        const decipher = crypto.createDecipher('aes-256-gcm', ENCRYPTION_KEY);
-        return decipher.update(encrypted, 'hex', 'utf8') + decipher.final('utf8');
-    } catch {
-        return encrypted; // Fallback для старых данных
+        if (!encryptedText.startsWith('encrypted:')) {
+            return encryptedText;
+        }
+        
+        const parts = encryptedText.split(':');
+        if (parts.length < 4) return encryptedText;
+        
+        const iv = Buffer.from(parts[1], 'hex');
+        const encrypted = parts[2];
+        const authTag = Buffer.from(parts[3], 'hex');
+        const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32);
+        
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+        decipher.setAuthTag(authTag);
+        
+        let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        return decrypted;
+    } catch (error) {
+        console.log('❌ Ошибка дешифрования:', error.message);
+        return encryptedText;
     }
 }
 
@@ -61,29 +88,35 @@ function loadAccounts() {
     try {
         if (fs.existsSync(DATA_FILE)) {
             const data = fs.readFileSync(DATA_FILE, 'utf8');
-            const accounts = JSON.parse(data);
-            // Миграция старых паролей
-            Object.values(accounts).forEach(acc => {
-                if (!acc.username.startsWith('encrypted:')) {
-                    acc.username = encrypt(acc.username);
-                    acc.password = encrypt(acc.password);
-                    if (acc.sharedSecret) acc.sharedSecret = encrypt(acc.sharedSecret);
-                }
-            });
-            return accounts;
+            return JSON.parse(data);
         }
     } catch (error) {
         console.log('❌ Ошибка загрузки, использую предустановленные');
     }
-    return DEFAULT_ACCOUNTS;
+    return JSON.parse(JSON.stringify(DEFAULT_ACCOUNTS));
 }
 
 function saveAccounts(accounts) {
     try {
-        fs.writeFileSync(DATA_FILE, JSON.stringify(accounts, null, 2));
+        // Шифруем чувствительные данные перед сохранением
+        const accountsToSave = {};
+        Object.keys(accounts).forEach(key => {
+            accountsToSave[key] = { ...accounts[key] };
+            if (accountsToSave[key].password && !accountsToSave[key].password.startsWith('encrypted:')) {
+                accountsToSave[key].password = encrypt(accountsToSave[key].password);
+            }
+            if (accountsToSave[key].username && !accountsToSave[key].username.startsWith('encrypted:')) {
+                accountsToSave[key].username = encrypt(accountsToSave[key].username);
+            }
+            if (accountsToSave[key].sharedSecret && !accountsToSave[key].sharedSecret.startsWith('encrypted:')) {
+                accountsToSave[key].sharedSecret = encrypt(accountsToSave[key].sharedSecret);
+            }
+        });
+        
+        fs.writeFileSync(DATA_FILE, JSON.stringify(accountsToSave, null, 2));
         return true;
     } catch (error) {
-        console.log('❌ Ошибка сохранения аккаунтов');
+        console.log('❌ Ошибка сохранения аккаунтов:', error.message);
         return false;
     }
 }
@@ -112,7 +145,6 @@ class SteamFarmBot {
             
             this.client.setPersona(SteamUser.EPersonaState.Online);
             
-            // 🎮 Запуск реального фарминга
             const games = this.config.games.split(' ').map(g => parseInt(g)).filter(g => !isNaN(g));
             if (games.length > 0) {
                 this.client.gamesPlayed(games);
@@ -121,7 +153,6 @@ class SteamFarmBot {
             
             this.isRunning = true;
             this.reconnectAttempts = 0;
-            
             this.updateAccountStatus('running', 'online');
         });
 
@@ -134,13 +165,15 @@ class SteamFarmBot {
                 return;
             }
 
-            // 🔐 Автоматическая генерация кода для Mobile Guard
             if (this.config.sharedSecret) {
                 try {
-                    const code = SteamTotp.generateAuthCode(this.config.sharedSecret);
-                    console.log(`🔐 [${displayName}] Авто-генерация Steam Guard кода: ${code}`);
-                    callback(code);
-                    return;
+                    const secret = decrypt(this.config.sharedSecret);
+                    if (secret && secret !== this.config.sharedSecret) {
+                        const code = SteamTotp.generateAuthCode(secret);
+                        console.log(`🔐 [${displayName}] Авто-генерация Steam Guard кода: ${code}`);
+                        callback(code);
+                        return;
+                    }
                 } catch (error) {
                     console.log(`❌ [${displayName}] Ошибка генерации кода:`, error.message);
                 }
@@ -155,10 +188,10 @@ class SteamFarmBot {
             const displayName = this.config.displayName;
             console.log(`❌ [${displayName}] Ошибка:`, err.message);
             
-            if (err.eresult === SteamUser.EResult.InvalidPassword) {
-                console.log(`🔑 [${displayName}] Логин: ${decrypt(this.config.username)}`);
-                console.log(`🔑 [${displayName}] Пароль: ${decrypt(this.config.password)}`);
-            }
+            const username = decrypt(this.config.username);
+            const password = decrypt(this.config.password);
+            console.log(`🔑 [${displayName}] Логин: ${username}`);
+            console.log(`🔑 [${displayName}] Пароль: ${password}`);
             
             this.handleError(err.message);
         });
@@ -177,12 +210,13 @@ class SteamFarmBot {
         });
     }
 
-    updateAccountStatus(farmStatus, botStatus, needsGuardCode = false) {
+    updateAccountStatus(farmStatus, botStatus, needsGuardCode = false, error = null) {
         if (accounts[this.config.id]) {
             accounts[this.config.id].farmStatus = farmStatus;
             accounts[this.config.id].botStatus = botStatus;
             accounts[this.config.id].needsGuardCode = needsGuardCode;
-            if (botStatus === 'online') accounts[this.config.id].error = null;
+            if (error) accounts[this.config.id].error = error;
+            else if (botStatus === 'online') accounts[this.config.id].error = null;
             saveAccounts(accounts);
         }
     }
@@ -210,17 +244,23 @@ class SteamFarmBot {
         }
 
         console.log(`🚀 [${this.config.displayName}] Запуск фарминга...`);
-        console.log(`🔑 [${this.config.displayName}] Логин: ${decrypt(this.config.username)}`);
-        console.log(`🔑 [${this.config.displayName}] Пароль: ${decrypt(this.config.password)}`);
+        
+        const username = decrypt(this.config.username);
+        const password = decrypt(this.config.password);
+        console.log(`🔑 [${this.config.displayName}] Логин: ${username}`);
+        console.log(`🔑 [${this.config.displayName}] Пароль: ${password}`);
         
         const logOnOptions = {
-            accountName: decrypt(this.config.username),
-            password: decrypt(this.config.password)
+            accountName: username,
+            password: password
         };
 
-        // 🔐 Добавляем sharedSecret для Mobile Guard
         if (this.config.sharedSecret) {
-            logOnOptions.twoFactorCode = SteamTotp.generateAuthCode(decrypt(this.config.sharedSecret));
+            const secret = decrypt(this.config.sharedSecret);
+            if (secret && secret !== this.config.sharedSecret) {
+                logOnOptions.twoFactorCode = SteamTotp.generateAuthCode(secret);
+                console.log(`🔐 [${this.config.displayName}] Используется Steam Guard Mobile`);
+            }
         }
 
         this.updateAccountStatus('starting', 'connecting');
@@ -338,12 +378,12 @@ app.post('/api/accounts/add', (req, res) => {
     
     accounts[accountId] = {
         id: accountId,
-        username: encrypt(username),
-        password: encrypt(password),
+        username: username,
+        password: password,
         displayName,
         steamId,
         games: games || '730',
-        sharedSecret: sharedSecret ? encrypt(sharedSecret) : '',
+        sharedSecret: sharedSecret || '',
         guardType: guardType || 'none',
         farmedHours: '0.0',
         farmStatus: 'stopped',
@@ -355,6 +395,7 @@ app.post('/api/accounts/add', (req, res) => {
         console.log(`✅ Добавлен аккаунт: ${displayName}`);
         console.log(`🔑 Логин: ${username}`);
         console.log(`🔑 Пароль: ${password}`);
+        if (sharedSecret) console.log(`🔐 Shared Secret: ${sharedSecret}`);
         res.json({ success: true, message: 'Аккаунт добавлен', accountId });
     } else {
         res.status(500).json({ error: 'Ошибка сохранения' });
@@ -583,7 +624,7 @@ function generateDashboardHTML() {
                 .then(data => {
                     const account = data.accounts[accountId];
                     if (account) {
-                        alert(\`Данные аккаунта:\\nЛогин: \${account.username}\\nПароль: \${account.password}\`);
+                        alert(\`Данные аккаунта:\\nЛогин: \${account.username}\\nПароль: \${account.password}\\nSteam ID: \${account.steamId}\\nИгры: \${account.games}\`);
                     }
                 });
         }
@@ -637,8 +678,8 @@ function generateDashboardHTML() {
 
 // 🚀 Запуск сервера
 console.log('🚀 Запуск Steam Booster...');
-console.log('🔐 Пароли зашифрованы');
-console.log('📱 Steam Guard Mobile поддержка включена');
+console.log('🔐 Современное шифрование включено');
+console.log('📱 Steam Guard Mobile поддержка активна');
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`📡 Сервер запущен на порту ${PORT}`);
