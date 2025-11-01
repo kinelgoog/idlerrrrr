@@ -1,36 +1,71 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="ru">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Steam Cosmos — Login</title>
-  <link rel="stylesheet" href="/styles.css">
+  <meta charset="UTF-8">
+  <title>Авторизация</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; }
+    input { display: block; margin: 0.5rem 0; padding: 0.5rem; width: 200px; }
+    button { padding: 0.5rem 1rem; }
+    .error { color: red; margin-top: 0.5rem; }
+    form { margin-bottom: 2rem; }
+  </style>
 </head>
-<body class="bg">
-  <div class="container">
-    <h1 class="logo">Steam <span class="accent">Cosmos</span></h1>
-    <p class="lead">Secure 24/7 farming. Register and add your Steam accounts.</p>
+<body>
+  <h1>Вход / Регистрация</h1>
 
-    <div class="card auth">
-      <div id="auth-forms">
-        <div class="tabs">
-          <button onclick="showLogin()">Войти</button>
-          <button onclick="showRegister()">Регистрация</button>
-        </div>
-        <div id="login-form">
-          <input id="l_user" placeholder="Логин">
-          <input id="l_pass" type="password" placeholder="Пароль">
-          <button class="btn" onclick="login()">Войти</button>
-        </div>
-        <div id="register-form" style="display:none">
-          <input id="r_user" placeholder="Логин">
-          <input id="r_pass" type="password" placeholder="Пароль">
-          <button class="btn" onclick="register()">Зарегистрироваться</button>
-        </div>
-      </div>
-    </div>
+  <form id="loginForm">
+    <h2>Вход</h2>
+    <input type="text" name="username" placeholder="Имя пользователя" required />
+    <input type="password" name="password" placeholder="Пароль" required />
+    <button type="submit">Войти</button>
+    <div id="loginError" class="error"></div>
+  </form>
 
-    <p class="muted">После входа вы попадёте в панель управления — фиолетовая космическая тема гарантирована ✨</p>
-  </div>
-<script src="/app.js"></script>
+  <form id="registerForm">
+    <h2>Регистрация</h2>
+    <input type="text" name="username" placeholder="Имя пользователя" required />
+    <input type="password" name="password" placeholder="Пароль" required />
+    <button type="submit">Зарегистрироваться</button>
+    <div id="registerError" class="error"></div>
+  </form>
+
+  <script>
+    async function request(url, data) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      return res.json();
+    }
+
+    document.getElementById('loginForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const username = e.target.username.value;
+      const password = e.target.password.value;
+      const result = await request('/api/auth/login', { username, password });
+      if (result.ok) {
+        alert(`Вход успешен! Привет, ${result.user.username}`);
+        window.location.reload();
+      } else {
+        document.getElementById('loginError').textContent = result.error || 'Ошибка';
+      }
+    });
+
+    document.getElementById('registerForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const username = e.target.username.value;
+      const password = e.target.password.value;
+      const result = await request('/api/auth/register', { username, password });
+      if (result.ok) {
+        alert(`Регистрация успешна! Привет, ${result.user.username}`);
+        window.location.reload();
+      } else {
+        document.getElementById('registerError').textContent = result.error || 'Ошибка';
+      }
+    });
+  </script>
 </body>
 </html>
+
