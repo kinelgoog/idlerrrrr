@@ -7,11 +7,10 @@ if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir);
 
 const dbPath = path.join(dataDir, 'app.db');
 const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) console.error('❌ Ошибка при подключении к базе:', err);
-  else console.log('✅ SQLite база подключена');
+  if (err) console.error('❌ SQLite Error:', err);
+  else console.log('✅ SQLite connected');
 });
 
-// Инициализация таблиц
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
