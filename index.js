@@ -4,9 +4,9 @@ const helmet = require('helmet');
 const session = require('express-session');
 const bodyParser = require('body-parser');
 const path = require('path');
-const logger = require('./src/utils/logger');
-const DB = require('./src/db');
-const BotManager = require('./src/botManager');
+const logger = require('./utils/logger'); // <-- исправлено
+const DB = require('./db');               // <-- исправлено
+const BotManager = require('./botManager');
 const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
 
