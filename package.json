@@ -16,6 +16,7 @@
     "node-fetch": "^2.6.7",
     "steam-totp": "^2.1.2",
     "steam-user": "^4.28.1",
+      "sqlite": "^4.1.0",
     "sqlite3": "^5.1.6",
     "helmet": "^7.0.0",
     "express-rate-limit": "^6.8.1",
