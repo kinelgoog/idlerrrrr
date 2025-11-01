@@ -1,115 +1,36 @@
-<!-- public/index.html -->
 <!doctype html>
 <html>
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Steam Hour Booster</title>
-<style>
-  body{font-family:Arial;background:#121212;color:#fff;padding:20px}
-  .card{background:#1e1e1e;padding:15px;border-radius:8px;margin-bottom:12px}
-  .btn{padding:8px 12px;border-radius:6px;border:none;cursor:pointer}
-  .start{background:#43b581;color:white}
-  .stop{background:#f04747;color:white}
-  .refresh{background:#7289da;color:white}
-  .status{display:inline-block;padding:4px 8px;border-radius:6px;font-size:0.9em}
-  .online{background:#43b581}
-  .offline{background:#747f8d}
-  .error{background:#f04747}
-  .guard{background:#faa61a}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
-</style>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Steam Cosmos — Login</title>
+  <link rel="stylesheet" href="/styles.css">
 </head>
-<body>
-  <h1>🎮 Steam Hour Booster</h1>
-  <p>Панель управления — безопасный доступ через API_KEY или login (если настроен)</p>
+<body class="bg">
+  <div class="container">
+    <h1 class="logo">Steam <span class="accent">Cosmos</span></h1>
+    <p class="lead">Secure 24/7 farming. Register and add your Steam accounts.</p>
 
-  <div id="accounts" class="grid"></div>
-
-<script>
-async function fetchStatus() {
-  try {
-    const headers = {};
-    // если у тебя API_KEY - можно подставить: headers['x-api-key']='...';
-    const res = await fetch('/api/status', { headers });
-    const json = await res.json();
-    render(json.accounts || []);
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-function render(accounts) {
-  const root = document.getElementById('accounts');
-  root.innerHTML = '';
-  accounts.forEach(acc => {
-    const div = document.createElement('div');
-    div.className = 'card';
-    const statusClass = acc.botStatus === 'online' ? 'online' :
-                        acc.botStatus === 'steam_guard' ? 'guard' :
-                        acc.botStatus === 'error' ? 'error' : 'offline';
-    div.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <strong>${acc.displayName}</strong>
-        <span class="status ${statusClass}">${acc.botStatus ? acc.botStatus.toUpperCase() : 'OFFLINE'}</span>
-      </div>
-      <div style="margin-top:8px">Игры: ${acc.games && acc.games.length ? acc.games.join(',') : '—'}</div>
-      ${acc.error ? `<div style="color:#f04747;margin-top:8px">Ошибка: ${acc.error}</div>` : ''}
-      <div style="margin-top:10px">
-        <button class="btn ${acc.farmStatus === 'running' ? 'stop' : 'start'}"
-          onclick="${acc.farmStatus === 'running' ? `stopFarm('${acc.id}')` : `startFarm('${acc.id}')`}">
-          ${acc.farmStatus === 'running' ? '⏹️ СТОП' : '▶️ СТАРТ'}
-        </button>
-        <button class="btn refresh" onclick="fetchStatus()">🔄 ОБНОВИТЬ</button>
-      </div>
-      ${acc.needsGuardCode ? `
-        <div style="margin-top:10px;background:#faa61a20;padding:8px;border-radius:6px">
-          Требуется Steam Guard код
-          <div style="margin-top:8px">
-            <input id="code-${acc.id}" placeholder="код" maxlength="5" style="padding:6px;border-radius:6px;background:#121212;color:white;border:1px solid #333">
-            <button class="btn guard" onclick="submitCode('${acc.id}')">ОТПРАВИТЬ</button>
-          </div>
+    <div class="card auth">
+      <div id="auth-forms">
+        <div class="tabs">
+          <button onclick="showLogin()">Войти</button>
+          <button onclick="showRegister()">Регистрация</button>
         </div>
-      ` : ''}
-    `;
-    root.appendChild(div);
-  });
-}
+        <div id="login-form">
+          <input id="l_user" placeholder="Логин">
+          <input id="l_pass" type="password" placeholder="Пароль">
+          <button class="btn" onclick="login()">Войти</button>
+        </div>
+        <div id="register-form" style="display:none">
+          <input id="r_user" placeholder="Логин">
+          <input id="r_pass" type="password" placeholder="Пароль">
+          <button class="btn" onclick="register()">Зарегистрироваться</button>
+        </div>
+      </div>
+    </div>
 
-async function startFarm(id) {
-  try {
-    const res = await fetch('/api/farm/start/' + id, { method: 'POST' });
-    const json = await res.json();
-    if (!json.success) alert('Ошибка: ' + (json.error || 'unknown'));
-    fetchStatus();
-  } catch (e) { alert('Ошибка сети'); console.error(e); }
-}
-
-async function stopFarm(id) {
-  try {
-    const res = await fetch('/api/farm/stop/' + id, { method: 'POST' });
-    const json = await res.json();
-    fetchStatus();
-  } catch (e) { alert('Ошибка сети'); }
-}
-
-async function submitCode(id) {
-  const val = document.getElementById('code-' + id).value;
-  if (!val) return alert('Введите код');
-  try {
-    const res = await fetch('/api/steam-guard/' + id, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ code: val })
-    });
-    const json = await res.json();
-    if (!json.success) alert('Ошибка: ' + (json.error || 'unknown'));
-    fetchStatus();
-  } catch (e) { alert('Ошибка сети'); }
-}
-
-fetchStatus();
-setInterval(fetchStatus, 5000);
-</script>
+    <p class="muted">После входа вы попадёте в панель управления — фиолетовая космическая тема гарантирована ✨</p>
+  </div>
+<script src="/app.js"></script>
 </body>
 </html>

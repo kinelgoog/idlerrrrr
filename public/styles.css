@@ -1,0 +1,20 @@
+:root{
+  --bg:#0b0712;
+  --card:#130b1a;
+  --accent:#9b6cff;
+  --accent-2:#6b2eff;
+  --muted:#bfb2ff;
+  --glass: rgba(255,255,255,0.04);
+}
+*{box-sizing:border-box;font-family:Inter,Segoe UI,Arial;}
+body.bg{background: radial-gradient(1200px 600px at 10% 10%, #1b0f2b 0%, rgba(107,46,255,0.12) 10%, transparent 20%), radial-gradient(900px 400px at 90% 80%, #2b0f3a 0%, rgba(155,108,255,0.08) 10%, transparent 25%), var(--bg); color:var(--muted); min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px;}
+.container{width:100%; max-width:920px;}
+.logo{font-size:36px; margin:0 0 6px 0; color:transparent; background:linear-gradient(90deg,var(--accent),var(--accent-2)); -webkit-background-clip:text; background-clip:text;}
+.lead{margin:0 0 18px 0; color:rgba(255,255,255,0.75);}
+.card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); padding:18px; border-radius:12px; box-shadow: 0 6px 30px rgba(43,10,80,0.6); border:1px solid rgba(255,255,255,0.04);}
+.auth .tabs{display:flex; gap:8px; margin-bottom:12px;}
+.tabs button{background:transparent;border:1px solid rgba(255,255,255,0.04); padding:8px 12px; border-radius:8px; color:var(--muted); cursor:pointer;}
+input{display:block;width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06); background:rgba(255,255,255,0.02); color:var(--muted); margin-bottom:8px;}
+.btn{background:linear-gradient(90deg,var(--accent),var(--accent-2)); color:white; padding:10px 14px; border-radius:10px; border:none; cursor:pointer;}
+.muted{color:rgba(255,255,255,0.45); margin-top:10px;}
+footer{margin-top:18px; color:rgba(255,255,255,0.3); font-size:13px;}

@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard — Steam Cosmos</title>
+<link rel="stylesheet" href="/styles.css"></head><body class="bg">
+<div class="container">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div><h2 style="margin:0;color:var(--muted)">Панель <span style="color:var(--accent)">Cosmos</span></h2><div style="color:rgba(255,255,255,0.6)">Ваши аккаунты и боты</div></div>
+    <div><button class="btn" onclick="logout()">Выйти</button></div>
+  </div>
+
+  <div class="card" style="margin-bottom:12px">
+    <h3>Добавить Steam аккаунт</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <input id="sa_login" placeholder="Steam login">
+      <input id="sa_pass" placeholder="Steam password" type="password">
+      <input id="sa_display" placeholder="Display name (optional)">
+      <input id="sa_games" placeholder="Games (comma separated, e.g., 730)">
+      <input id="sa_shared" placeholder="shared_secret (optional for mobile auth)">
+    </div>
+    <div style="margin-top:8px"><button class="btn" onclick="addAccount()">Добавить аккаунт</button></div>
+  </div>
+
+  <div id="accounts"></div>
+  <footer>Made with ❤️ in purple space</footer>
+</div>
+<script src="/dashboard.js"></script>
+</body></html>
