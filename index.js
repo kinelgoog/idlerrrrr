@@ -13,8 +13,7 @@ const accounts = {
         displayName: 'точка',
         games: '730',
         farmStatus: 'stopped',
-        botStatus: 'offline',
-        lastLoginAttempt: 0
+        botStatus: 'offline'
     },
     'acc_2': {
         id: 'acc_2',
@@ -23,25 +22,17 @@ const accounts = {
         displayName: 'кинелька',
         games: '730', 
         farmStatus: 'stopped',
-        botStatus: 'offline',
-        lastLoginAttempt: 0
+        botStatus: 'offline'
     }
 };
 
-// 🤖 Steam Bot
+// 🤖 Простой Steam Bot
 class SteamFarmBot {
     constructor(accountConfig) {
         this.config = accountConfig;
-        this.client = new SteamUser({
-            promptSteamGuardCode: false,
-            dataDirectory: './steam_data',
-            enablePicsCache: false,
-            autoRelogin: false
-        });
+        this.client = new SteamUser();
         this.isRunning = false;
         this.steamGuardCallback = null;
-        this.loginTimeout = null;
-        this.setupEventHandlers();
     }
 
     setupEventHandlers() {
@@ -49,59 +40,29 @@ class SteamFarmBot {
             console.log(`✅ [${this.config.displayName}] Успешный вход!`);
             
             this.client.setPersona(1);
-            const games = this.config.games.split(' ').map(g => parseInt(g));
-            this.client.gamesPlayed(games);
+            this.client.gamesPlayed([730]); // CS2
             
             this.isRunning = true;
             accounts[this.config.id].farmStatus = 'running';
             accounts[this.config.id].botStatus = 'online';
             accounts[this.config.id].error = null;
-            
-            if (this.loginTimeout) {
-                clearTimeout(this.loginTimeout);
-                this.loginTimeout = null;
-            }
         });
 
-        this.client.on('steamGuard', (domain, callback, lastCodeWrong) => {
-            console.log(`🔐 [${this.config.displayName}] Steam Guard запрос!`);
+        this.client.on('steamGuard', (domain, callback) => {
+            console.log(`🔐 [${this.config.displayName}] Требуется Steam Guard!`);
             
-            if (lastCodeWrong) {
-                console.log(`❌ [${this.config.displayName}] Неверный код!`);
-                accounts[this.config.id].error = 'Неверный Steam Guard код';
-                return;
-            }
-
             // Сохраняем callback для ввода кода
             this.steamGuardCallback = callback;
             accounts[this.config.id].botStatus = 'steam_guard';
             accounts[this.config.id].needsGuardCode = true;
-            accounts[this.config.id].error = null;
-            
-            console.log(`📱 [${this.config.displayName}] Проверь Steam Mobile - должен прийти запрос на подтверждение!`);
         });
 
         this.client.on('error', (err) => {
             console.log(`❌ [${this.config.displayName}] Ошибка:`, err.message);
             
-            if (err.eresult === SteamUser.EResult.RateLimitExceeded) {
-                console.log(`⏳ [${this.config.displayName}] Лимит запросов! Ждем 5 минут...`);
-                accounts[this.config.id].error = 'Лимит запросов Steam. Попробуй через 5 минут';
-                accounts[this.config.id].botStatus = 'error';
-                accounts[this.config.id].farmStatus = 'stopped';
-                
-                // Блокируем повторные попытки на 5 минут
-                accounts[this.config.id].lastLoginAttempt = Date.now();
-            } else {
-                accounts[this.config.id].botStatus = 'error';
-                accounts[this.config.id].farmStatus = 'stopped';
-                accounts[this.config.id].error = err.message;
-            }
-            
-            if (this.loginTimeout) {
-                clearTimeout(this.loginTimeout);
-                this.loginTimeout = null;
-            }
+            accounts[this.config.id].botStatus = 'error';
+            accounts[this.config.id].farmStatus = 'stopped';
+            accounts[this.config.id].error = err.message;
         });
 
         this.client.on('disconnected', () => {
@@ -127,46 +88,19 @@ class SteamFarmBot {
     startFarming() {
         if (this.isRunning) return;
 
-        // Проверяем лимит запросов
-        const timeSinceLastAttempt = Date.now() - accounts[this.config.id].lastLoginAttempt;
-        if (timeSinceLastAttempt < 300000) { // 5 минут
-            const waitTime = Math.ceil((300000 - timeSinceLastAttempt) / 1000 / 60);
-            console.log(`⏳ [${this.config.displayName}] Подожди еще ${waitTime} минут(ы) из-за лимита Steam`);
-            accounts[this.config.id].error = `Лимит Steam. Подожди ${waitTime} минут(ы)`;
-            return;
-        }
-
         console.log(`🚀 [${this.config.displayName}] Запуск...`);
-        console.log(`🔑 Логин: ${this.config.username}`);
 
         accounts[this.config.id].farmStatus = 'starting';
         accounts[this.config.id].botStatus = 'connecting';
         accounts[this.config.id].error = null;
         accounts[this.config.id].needsGuardCode = false;
-        accounts[this.config.id].lastLoginAttempt = Date.now();
 
-        // Добавляем случайную задержку перед входом
-        const delay = Math.random() * 10000 + 5000; // 5-15 секунд
-        console.log(`⏳ [${this.config.displayName}] Задержка ${Math.round(delay/1000)} сек...`);
-
-        setTimeout(() => {
-            this.client.logOn({
-                accountName: this.config.username,
-                password: this.config.password,
-                machineName: `SteamBooster-${Date.now()}`
-            });
-
-            // Таймаут подключения
-            this.loginTimeout = setTimeout(() => {
-                if (!this.isRunning) {
-                    console.log(`⏰ [${this.config.displayName}] Таймаут подключения`);
-                    accounts[this.config.id].botStatus = 'error';
-                    accounts[this.config.id].farmStatus = 'stopped';
-                    accounts[this.config.id].error = 'Таймаут подключения';
-                }
-            }, 45000); // 45 секунд
-
-        }, delay);
+        this.setupEventHandlers();
+        
+        this.client.logOn({
+            accountName: this.config.username,
+            password: this.config.password
+        });
     }
 
     stopFarming() {
@@ -178,11 +112,6 @@ class SteamFarmBot {
         this.steamGuardCallback = null;
         accounts[this.config.id].farmStatus = 'stopped';
         accounts[this.config.id].botStatus = 'offline';
-        
-        if (this.loginTimeout) {
-            clearTimeout(this.loginTimeout);
-            this.loginTimeout = null;
-        }
     }
 }
 
@@ -233,8 +162,8 @@ app.get('/', (req, res) => {
         <style>
             body { font-family: Arial; background: #1e1e1e; color: white; padding: 20px; }
             .header { text-align: center; margin-bottom: 30px; }
-            .accounts { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; }
-            .account { background: #2d2d2d; padding: 20px; border-radius: 10px; border-left: 4px solid #7289da; }
+            .accounts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+            .account { background: #2d2d2d; padding: 20px; border-radius: 10px; }
             .account-header { display: flex; justify-content: space-between; margin-bottom: 15px; }
             .account-name { font-size: 1.2em; font-weight: bold; }
             .status { padding: 5px 10px; border-radius: 5px; font-size: 0.8em; }
@@ -252,14 +181,12 @@ app.get('/', (req, res) => {
             .modal-content { background: #2d2d2d; padding: 30px; border-radius: 10px; max-width: 400px; width: 90%; }
             .form-group { margin-bottom: 15px; }
             .form-group input { width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #444; background: #1e1e1e; color: white; }
-            .instructions { background: #faa61a20; padding: 15px; border-radius: 5px; margin: 10px 0; font-size: 0.9em; }
-            .rate-limit { background: #f0474720; padding: 15px; border-radius: 5px; margin: 10px 0; }
         </style>
     </head>
     <body>
         <div class="header">
             <h1>🎮 Steam Booster</h1>
-            <p>Умный фарминг с защитой от лимитов Steam</p>
+            <p>Простой фарминг часов</p>
         </div>
         
         <div id="steamGuardModal" class="modal">
@@ -270,12 +197,7 @@ app.get('/', (req, res) => {
         </div>
         
         <div class="accounts" id="accounts">
-            ${Object.values(accounts).map(acc => {
-                const timeSinceLastAttempt = Date.now() - acc.lastLoginAttempt;
-                const isRateLimited = timeSinceLastAttempt < 300000;
-                const waitMinutes = Math.ceil((300000 - timeSinceLastAttempt) / 1000 / 60);
-                
-                return `
+            ${Object.values(accounts).map(acc => `
                 <div class="account">
                     <div class="account-header">
                         <div class="account-name">${acc.displayName}</div>
@@ -286,28 +208,13 @@ app.get('/', (req, res) => {
                         </div>
                     </div>
                     <div><strong>Игры:</strong> ${acc.games}</div>
-                    
-                    ${isRateLimited && acc.error ? `
-                    <div class="rate-limit">
-                        <strong>⏳ Лимит Steam:</strong> Подожди ${waitMinutes} минут(ы) перед следующим запуском
-                    </div>
-                    ` : ''}
-                    
-                    ${acc.error && !isRateLimited ? `<div class="error-text"><strong>Ошибка:</strong> ${acc.error}</div>` : ''}
+                    ${acc.error ? `<div class="error-text"><strong>Ошибка:</strong> ${acc.error}</div>` : ''}
                     
                     ${acc.needsGuardCode ? `
                     <div class="guard-section">
-                        <div class="instructions">
-                            <strong>📱 Подтверди вход в Steam Mobile:</strong><br>
-                            1. Открой Steam Mobile на телефоне<br>
-                            2. Должен прийти запрос "Подтвердить вход"<br>
-                            3. Нажми "ПОДТВЕРДИТЬ"<br>
-                            <strong>ИЛИ</strong><br>
-                            4. Нажми "Steam Guard" внизу<br>
-                            5. Скопируй 5-значный код и введи ниже
-                        </div>
+                        <strong>🔐 Требуется Steam Guard код</strong>
                         <button class="btn guard" onclick="showSteamGuardModal('${acc.id}', '${acc.displayName}')" style="width: 100%; margin-top: 10px;">
-                            🔐 ВВЕСТИ КОД
+                            ВВЕСТИ КОД
                         </button>
                     </div>
                     ` : ''}
@@ -315,13 +222,12 @@ app.get('/', (req, res) => {
                     <div style="margin-top: 15px;">
                         ${acc.farmStatus === 'running' ? 
                             '<button class="btn stop" onclick="stopFarm(\'' + acc.id + '\')">⏹️ СТОП</button>' : 
-                            `<button class="btn start" onclick="startFarm('${acc.id}')" ${isRateLimited ? 'disabled style="background: #666;"' : ''}>🎮 СТАРТ</button>`
+                            '<button class="btn start" onclick="startFarm(\'' + acc.id + '\')">🎮 СТАРТ</button>'
                         }
                         <button class="btn" style="background: #7289da;" onclick="location.reload()">🔄 ОБНОВИТЬ</button>
                     </div>
                 </div>
-                `;
-            }).join('')}
+            `).join('')}
         </div>
 
         <script>
@@ -329,25 +235,19 @@ app.get('/', (req, res) => {
                 document.getElementById('steamGuardContent').innerHTML = \`
                     <div class="form-group">
                         <label>Введите код для <strong>\${accountName}</strong>:</label>
-                        <input type="text" id="steamGuardCode" placeholder="5-значный код из Steam Mobile" maxlength="5" autofocus>
+                        <input type="text" id="steamGuardCode" placeholder="5-значный код" maxlength="5">
                     </div>
                     <button class="btn guard" onclick="submitSteamGuardCode('\${accountId}')" style="width: 100%;">
-                        🔐 ОТПРАВИТЬ КОД
+                        ОТПРАВИТЬ КОД
                     </button>
-                    <div style="margin-top: 10px; text-align: center;">
-                        <button class="btn" style="background: #747f8d; width: 100%;" onclick="document.getElementById('steamGuardModal').style.display='none'">
-                            ❌ ОТМЕНА
-                        </button>
-                    </div>
                 \`;
                 document.getElementById('steamGuardModal').style.display = 'flex';
-                document.getElementById('steamGuardCode').focus();
             }
 
             async function submitSteamGuardCode(accountId) {
                 const code = document.getElementById('steamGuardCode').value;
-                if (!code || code.length !== 5) {
-                    alert('Введите 5-значный код');
+                if (!code) {
+                    alert('Введите код');
                     return;
                 }
 
@@ -360,7 +260,7 @@ app.get('/', (req, res) => {
                     const result = await response.json();
                     if (result.success) {
                         document.getElementById('steamGuardModal').style.display = 'none';
-                        setTimeout(() => location.reload(), 1000);
+                        location.reload();
                     } else {
                         alert('Ошибка: ' + result.error);
                     }
@@ -374,7 +274,7 @@ app.get('/', (req, res) => {
                     const response = await fetch('/api/farm/start/' + accountId, { method: 'POST' });
                     const result = await response.json();
                     if (result.success) {
-                        setTimeout(() => location.reload(), 1000);
+                        location.reload();
                     } else {
                         alert('Ошибка: ' + result.error);
                     }
@@ -388,7 +288,7 @@ app.get('/', (req, res) => {
                     const response = await fetch('/api/farm/stop/' + accountId, { method: 'POST' });
                     const result = await response.json();
                     if (result.success) {
-                        setTimeout(() => location.reload(), 1000);
+                        location.reload();
                     }
                 } catch (error) {
                     alert('Ошибка сети');
@@ -410,14 +310,45 @@ app.get('/', (req, res) => {
     `);
 });
 
-// ... остальные роуты без изменений ...
+app.post('/api/farm/start/:accountId', (req, res) => {
+    const { accountId } = req.params;
+    if (startFarm(accountId)) {
+        res.json({ success: true, message: 'Фарм запущен' });
+    } else {
+        res.status(404).json({ error: 'Аккаунт не найден' });
+    }
+});
+
+app.post('/api/farm/stop/:accountId', (req, res) => {
+    const { accountId } = req.params;
+    if (stopFarm(accountId)) {
+        res.json({ success: true, message: 'Фарм остановлен' });
+    } else {
+        res.status(404).json({ error: 'Аккаунт не найден' });
+    }
+});
+
+app.post('/api/steam-guard/:accountId', (req, res) => {
+    const { accountId } = req.params;
+    const { code } = req.body;
+    
+    if (!code) {
+        return res.status(400).json({ error: 'Введите код' });
+    }
+    
+    if (submitSteamGuardCode(accountId, code)) {
+        res.json({ success: true, message: 'Код отправлен' });
+    } else {
+        res.status(400).json({ error: 'Ошибка отправки кода' });
+    }
+});
+
+app.get('/api/status', (req, res) => {
+    res.json({ accounts });
+});
 
 // 🚀 Запуск
-console.log('🚀 Steam Booster с защитой от лимитов запущен!');
-console.log('📝 Особенности:');
-console.log('   - Случайные задержки 5-15 секунд между запросами');
-console.log('   - Блокировка на 5 минут при лимите');
-console.log('   - Уникальные machineName для каждого входа');
+console.log('🚀 Steam Booster запущен!');
 console.log(`📡 Сервер: http://localhost:${PORT}`);
 
 app.listen(PORT, '0.0.0.0');
