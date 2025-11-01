@@ -1,18 +1,17 @@
-// index.js
 require('dotenv').config();
 const express = require('express');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const session = require('express-session');
-const path = require('path');
 const bodyParser = require('body-parser');
+const path = require('path');
 const logger = require('./src/utils/logger');
 const DB = require('./src/db');
 const BotManager = require('./src/botManager');
+const rateLimit = require('express-rate-limit');
+const cookieParser = require('cookie-parser');
 
 const PORT = process.env.PORT || 10000;
-const API_KEY = process.env.API_KEY || '';
-const SESSION_SECRET = process.env.SESSION_SECRET || 'change_this_in_prod';
+const SESSION_SECRET = process.env.SESSION_SECRET || 'change_this';
 const DB_PATH = process.env.DB_PATH || './data/app.db';
 
 (async () => {
@@ -22,14 +21,10 @@ const DB_PATH = process.env.DB_PATH || './data/app.db';
   const app = express();
   app.use(helmet());
   app.use(bodyParser.json());
-  app.use(bodyParser.urlencoded({ extended: false }));
+  app.use(bodyParser.urlencoded({ extended: true }));
+  app.use(cookieParser());
 
-  const limiter = rateLimit({
-    windowMs: 10 * 1000,
-    max: 20,
-    standardHeaders: true,
-    legacyHeaders: false,
-  });
+  const limiter = rateLimit({ windowMs: 10000, max: 50 });
   app.use('/api', limiter);
 
   app.use(session({
@@ -41,30 +36,22 @@ const DB_PATH = process.env.DB_PATH || './data/app.db';
 
   app.use(express.static(path.join(__dirname, 'public')));
 
-  // API auth middleware (API_KEY or session)
-  app.use('/api', (req, res, next) => {
-    if (req.session && req.session.loggedIn) return next();
-    if (!API_KEY) return next();
-    const token = req.headers['x-api-key'] || req.query.api_key;
-    if (!token || token !== API_KEY) {
-      return res.status(403).json({ error: 'Unauthorized' });
-    }
-    next();
-  });
-
+  // routes
   app.use('/api/auth', require('./src/routes/auth')(db));
+  app.use('/api/user', require('./src/routes/user')(db));
+  app.use('/api/steam-accounts', require('./src/routes/steamAccounts')(db, manager));
   app.use('/api/farm', require('./src/routes/farm')(manager));
   app.use('/api/steam-guard', require('./src/routes/steamGuard')(manager));
-  app.use('/api/status', require('./src/routes/status')(db, manager));
+  app.use('/api/status', require('./src/routes/status')(db));
 
   app.get('/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
 
   app.listen(PORT, '0.0.0.0', () => {
-    logger.info(`🚀 Steam Hour Booster listening on http://0.0.0.0:${PORT}`);
+    logger.info(`Server listening on http://0.0.0.0:${PORT}`);
   });
 
   process.on('SIGINT', async () => {
-    logger.info('SIGINT received — stopping bots...');
+    logger.info('SIGINT - shutting down bots...');
     await manager.shutdownAll();
     process.exit(0);
   });

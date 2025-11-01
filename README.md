@@ -1,13 +1,13 @@
-# Steam Hour Booster (refactor)
-Refactored secure Steam farming manager with mobile Steam Guard support (local TOTP), SQLite persistence, Express web UI, and exponential backoff to reduce RateLimit issues.
+# Steam Hour Booster — Multi-user Edition
+Features:
+- User registration & login
+- Each user can add multiple Steam accounts to farm
+- Steam Guard mobile support (local TOTP via shared_secret) or manual code entry
+- Per-account start/stop farm controls
+- Purple "cosmic" themed UI
+- SQLite persistence (suitable for testing). For production use Postgres/Redis.
 
-## Quick start
-1. Copy `.env.example` to `.env` and fill environment variables.
-2. Install deps: `npm install`
-3. Start: `npm start`
-
-## Notes for Render.com
-- Use a Background Worker for long-lived bot connections if possible.
-- Prefer a managed database (Postgres) for production; SQLite is fine for testing.
-- Do NOT commit `.env`.
-
+Instructions:
+1. Copy `.env.example` to `.env` and fill secrets.
+2. `npm install`
+3. `npm start`
