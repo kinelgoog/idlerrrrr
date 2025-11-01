@@ -1,6 +1,6 @@
 const express = require('express');
 const steamUser = require('steam-user');
-const steamTotp = require('steam-totp'); // ДОБАВЛЯЕМ ЭТОТ МОДУЛЬ!
+const steamTotp = require('steam-totp');
 const fetch = require('node-fetch');
 const fs = require('fs');
 
@@ -81,7 +81,7 @@ class FarmTimeTracker {
     }
 }
 
-// 🤖 ИСПРАВЛЕННЫЙ Steam Bot с поддержкой Mobile Steam Guard
+// 🤖 ИСПРАВЛЕННЫЙ Steam Bot с правильным определением Mobile Guard
 class SteamFarmBot {
     constructor(accountConfig) {
         this.config = accountConfig;
@@ -98,6 +98,7 @@ class SteamFarmBot {
         this.isWaitingForGuard = false;
         this.lastConnectionAttempt = 0;
         this.connectionTimeout = null;
+        this.guardType = null; // 🔥 Храним тип Guard
         this.setupEventHandlers();
     }
 
@@ -106,6 +107,7 @@ class SteamFarmBot {
             console.log(`✅ Бот ${this.config.displayName} успешно вошел в систему`);
             this.reconnectAttempts = 0;
             this.isWaitingForGuard = false;
+            this.guardType = null;
             
             const games = this.parseGames(this.config.games);
             console.log(`🎮 Запускаю фарм ${games.length} игр для ${this.config.displayName}:`, games);
@@ -129,7 +131,7 @@ class SteamFarmBot {
             }
         });
 
-        // 🔥 ПРАВИЛЬНЫЙ обработчик Steam Guard для Mobile
+        // 🔥 УЛУЧШЕННЫЙ обработчик Steam Guard
         this.client.on('steamGuard', (domain, callback, lastCodeWrong) => {
             console.log(`🔐 Steam Guard запрос для ${this.config.displayName}`);
             console.log(`📧 Домен: ${domain}`);
@@ -138,11 +140,16 @@ class SteamFarmBot {
             this.isWaitingForGuard = true;
             this.steamGuardCallback = callback;
             
-            // Определяем тип Steam Guard
+            // 🔥 ПРАВИЛЬНОЕ ОПРЕДЕЛЕНИЕ ТИПА GUARD
             let guardType = 'email';
-            if (!domain || domain === 'mobile') {
+            if (!domain || domain === '' || domain === 'mobile') {
                 guardType = 'mobile';
+                console.log(`📱 Определен Mobile Steam Guard для ${this.config.displayName}`);
+            } else {
+                console.log(`📧 Определен Email Steam Guard для ${this.config.displayName}, домен: ${domain}`);
             }
+            
+            this.guardType = guardType;
             
             if (accounts[this.config.id]) {
                 accounts[this.config.id].botStatus = 'steam_guard';
@@ -162,21 +169,23 @@ class SteamFarmBot {
             
             this.isRunning = false;
             this.isWaitingForGuard = false;
+            this.guardType = null;
             
             if (accounts[this.config.id]) {
                 accounts[this.config.id].botStatus = 'error';
                 accounts[this.config.id].farmStatus = 'stopped';
                 accounts[this.config.id].error = err.message;
                 
-                if (err.message.includes('RateLimitExceeded') || err.eresult === 84) {
+                // 🔥 ПРИ ОШИБКЕ InvalidPassword ПРЕДПОЛАГАЕМ MOBILE GUARD
+                if (err.message.includes('InvalidPassword') || err.eresult === 5) {
+                    accounts[this.config.id].needsSteamGuard = true;
+                    accounts[this.config.id].steamGuardType = 'mobile'; // Предполагаем mobile по умолчанию
+                    console.log(`📱 Предполагаем Mobile Guard для ${this.config.displayName} из-за ошибки InvalidPassword`);
+                } else if (err.message.includes('RateLimitExceeded') || err.eresult === 84) {
                     accounts[this.config.id].needsSteamGuard = false;
                     accounts[this.config.id].rateLimit = true;
                     accounts[this.config.id].rateLimitUntil = Date.now() + 3600000;
                     console.log(`🚫 RateLimit для ${this.config.displayName}. Блокировка на 1 час.`);
-                } else if (err.message.includes('InvalidPassword') || err.eresult === 5) {
-                    accounts[this.config.id].needsSteamGuard = true;
-                    accounts[this.config.id].steamGuardType = 'unknown';
-                    accounts[this.config.id].rateLimit = false;
                 } else {
                     accounts[this.config.id].needsSteamGuard = false;
                     accounts[this.config.id].steamGuardType = null;
@@ -199,10 +208,12 @@ class SteamFarmBot {
                 accounts[this.config.id].botStatus = 'offline';
                 accounts[this.config.id].farmStatus = 'stopped';
                 
-                if (eresult === 5) {
+                // 🔥 ПРИ ОТКЛЮЧЕНИИ ИЗ-ЗА AUTH ПРЕДПОЛАГАЕМ MOBILE GUARD
+                if (eresult === 5) { // InvalidPassword
                     accounts[this.config.id].needsSteamGuard = true;
-                    accounts[this.config.id].steamGuardType = 'unknown';
-                } else if (eresult === 84) {
+                    accounts[this.config.id].steamGuardType = 'mobile';
+                    console.log(`📱 Предполагаем Mobile Guard для ${this.config.displayName} из-за отключения с InvalidPassword`);
+                } else if (eresult === 84) { // RateLimitExceeded
                     accounts[this.config.id].rateLimit = true;
                     accounts[this.config.id].rateLimitUntil = Date.now() + 3600000;
                 }
@@ -242,11 +253,10 @@ class SteamFarmBot {
         if (this.steamGuardCallback && typeof this.steamGuardCallback === 'function') {
             console.log(`🔐 Отправка Steam Guard кода для ${this.config.displayName}: ${code}`);
             
-            // Вызываем callback с кодом
             this.steamGuardCallback(code);
-            
             this.steamGuardCallback = null;
             this.isWaitingForGuard = false;
+            this.guardType = null;
             
             if (accounts[this.config.id]) {
                 accounts[this.config.id].needsSteamGuard = false;
@@ -261,18 +271,20 @@ class SteamFarmBot {
         }
     }
 
-    // 🔥 НОВЫЙ МЕТОД: Поддержка Two-Factor Code для Mobile Guard
+    // 🔥 УЛУЧШЕННАЯ отправка Two-Factor кода
     submitTwoFactorCode(code) {
         console.log(`🔐 Отправка Two-Factor кода для ${this.config.displayName}: ${code}`);
         
-        // Используем twoFactorCode для мобильного аутентификатора
-        this.client.logOn({
+        // Переподключаемся с twoFactorCode
+        const logOnOptions = {
             accountName: this.config.username,
             password: this.config.password,
             twoFactorCode: code
-        });
+        };
         
+        this.client.logOn(logOnOptions);
         this.isWaitingForGuard = false;
+        this.guardType = null;
         
         if (accounts[this.config.id]) {
             accounts[this.config.id].needsSteamGuard = false;
@@ -317,7 +329,7 @@ class SteamFarmBot {
             password: this.config.password
         };
 
-        // 🔥 ДОБАВЛЯЕМ ПОДДЕРЖКУ SHARED SECRET ДЛЯ MOBILE GUARD
+        // 🔥 ДОБАВЛЯЕМ ПОДДЕРЖКУ SHARED SECRET
         if (account && account.sharedSecret) {
             try {
                 const twoFactorCode = steamTotp.generateAuthCode(account.sharedSecret);
@@ -333,6 +345,9 @@ class SteamFarmBot {
             account.botStatus = 'connecting';
             account.error = null;
             account.rateLimit = false;
+            // 🔥 СБРАСЫВАЕМ ТИП GUARD ПЕРЕД ЗАПУСКОМ
+            account.steamGuardType = null;
+            account.needsSteamGuard = false;
             saveAccounts(accounts);
         }
 
@@ -359,6 +374,7 @@ class SteamFarmBot {
             this.isRunning = false;
             this.isWaitingForGuard = false;
             this.steamGuardCallback = null;
+            this.guardType = null;
             this.farmTracker.stop();
             this.reconnectAttempts = 0;
             this.clearConnectionTimeout();
@@ -392,6 +408,9 @@ class SteamFarmBot {
             }
         }
         
+        // 🔥 ИСПОЛЬЗУЕМ ТЕКУЩИЙ ТИП GUARD ИЛИ ИЗ АККАУНТА
+        const currentGuardType = this.guardType || account?.steamGuardType;
+        
         return {
             isRunning: this.isRunning,
             farmStatus: this.isRunning ? 'running' : (this.isWaitingForGuard ? 'waiting' : 'stopped'),
@@ -399,7 +418,7 @@ class SteamFarmBot {
             botStatus: account?.botStatus || 'offline',
             currentGames: games,
             needsSteamGuard: this.isWaitingForGuard || account?.needsSteamGuard || false,
-            steamGuardType: account?.steamGuardType || null,
+            steamGuardType: currentGuardType,
             steamGuardDomain: account?.steamGuardDomain || null,
             lastCodeWrong: account?.lastCodeWrong || false,
             error: account?.error || null,
@@ -451,7 +470,6 @@ class BotManager {
         return false;
     }
 
-    // 🔥 НОВЫЙ МЕТОД: Отправка Two-Factor кода для Mobile Guard
     submitTwoFactorCode(accountId, code) {
         const bot = this.bots.get(accountId);
         if (bot) {
@@ -619,7 +637,7 @@ app.post('/api/accounts/add', (req, res) => {
         displayName,
         steamId,
         games: games || '730',
-        sharedSecret: sharedSecret || '', // 🔥 ДОБАВЛЯЕМ ПОЛЕ ДЛЯ SHARED SECRET
+        sharedSecret: sharedSecret || '',
         farmedHours: '0.0',
         farmStatus: 'stopped',
         botStatus: 'offline',
@@ -702,7 +720,7 @@ app.post('/api/steam-guard/:accountId', (req, res) => {
     
     let success = false;
     
-    // 🔥 ВЫБИРАЕМ ПРАВИЛЬНЫЙ МЕТОД В ЗАВИСИМОСТИ ОТ ТИПА GUARD
+    // 🔥 ВЫБИРАЕМ ПРАВИЛЬНЫЙ МЕТОД
     if (guardType === 'mobile') {
         success = botManager.submitTwoFactorCode(accountId, code);
     } else {
@@ -792,9 +810,6 @@ function generateDashboardHTML() {
             .form-group input { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--text-secondary); background: rgba(255,255,255,0.1); color: var(--text); }
             .notification { position: fixed; top: 20px; right: 20px; padding: 15px; border-radius: 10px; background: var(--surface); transform: translateX(400px); transition: transform 0.3s ease; }
             .notification.show { transform: translateX(0); }
-            .guard-type-selector { display: flex; gap: 10px; margin-bottom: 15px; }
-            .guard-type-btn { flex: 1; padding: 10px; border: 2px solid var(--text-secondary); border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; text-align: center; }
-            .guard-type-btn.active { border-color: var(--primary); background: var(--primary); color: white; }
         </style>
     </head>
     <body>
@@ -842,7 +857,7 @@ function generateDashboardHTML() {
                             <div class="account-status status-${account.rateLimit ? 'rate_limit' : account.steamGuardType === 'mobile' ? 'mobile_guard' : account.botStatus}">
                                 ${account.rateLimit ? 'Заблокирован' : 
                                   account.steamGuardType === 'mobile' ? 'Mobile Guard' :
-                                  account.botStatus === 'steam_guard' ? 'Email Guard' : 
+                                  account.botStatus === 'steam_guard' ? 'Steam Guard' : 
                                   account.botStatus === 'error' ? 'Ошибка' : account.botStatus}
                             </div>
                         </div>
@@ -860,6 +875,12 @@ function generateDashboardHTML() {
                             <div class="detail-row">
                                 <span class="detail-label">Тип аутентификации:</span>
                                 <span style="color: var(--success);">📱 Mobile Guard (Shared Secret)</span>
+                            </div>
+                            ` : ''}
+                            ${account.steamGuardType && account.needsSteamGuard ? `
+                            <div class="detail-row">
+                                <span class="detail-label">Требуется:</span>
+                                <span>${account.steamGuardType === 'mobile' ? '📱 Mobile Guard код' : '📧 Email Guard код'}</span>
                             </div>
                             ` : ''}
                             ${account.rateLimit ? `
@@ -888,13 +909,13 @@ function generateDashboardHTML() {
                         
                         ${account.needsSteamGuard && !account.rateLimit ? `
                         <div class="${account.steamGuardType === 'mobile' ? 'mobile-guard' : 'steam-guard'}-section">
-                            <p><strong>${account.steamGuardType === 'mobile' ? '📱 Mobile Steam Guard' : '📧 Email Steam Guard'}</strong></p>
+                            <p><strong>${account.steamGuardType === 'mobile' ? '📱 Mobile Steam Guard' : '🔐 Steam Guard'}</strong></p>
                             <p style="font-size: 0.9rem; margin-bottom: 10px;">
                                 ${account.steamGuardType === 'mobile' ? 
                                   'Введите код из мобильного приложения Steam' : 
-                                  'Код отправлен на вашу почту'}
+                                  'Введите код Steam Guard'}
                             </p>
-                            <button class="btn ${account.steamGuardType === 'mobile' ? 'btn-success' : 'btn-warning'}" onclick="showSteamGuardModal('${account.id}', '${account.displayName}', '${account.steamGuardType}')" style="width: 100%;">
+                            <button class="btn ${account.steamGuardType === 'mobile' ? 'btn-success' : 'btn-warning'}" onclick="showSteamGuardModal('${account.id}', '${account.displayName}', '${account.steamGuardType || 'email'}')" style="width: 100%;">
                                 <i class="fas fa-key"></i> Ввести код
                             </button>
                         </div>
@@ -962,7 +983,7 @@ function generateDashboardHTML() {
                                 <div class="account-status status-\${account.rateLimit ? 'rate_limit' : account.steamGuardType === 'mobile' ? 'mobile_guard' : account.botStatus}">
                                     \${account.rateLimit ? 'Заблокирован' : 
                                       account.steamGuardType === 'mobile' ? 'Mobile Guard' :
-                                      account.botStatus === 'steam_guard' ? 'Email Guard' : 
+                                      account.botStatus === 'steam_guard' ? 'Steam Guard' : 
                                       account.botStatus === 'error' ? 'Ошибка' : account.botStatus}
                                 </div>
                             </div>
@@ -980,6 +1001,12 @@ function generateDashboardHTML() {
                                 <div class="detail-row">
                                     <span class="detail-label">Тип аутентификации:</span>
                                     <span style="color: var(--success);">📱 Mobile Guard (Shared Secret)</span>
+                                </div>
+                                \` : ''}
+                                \${account.steamGuardType && account.needsSteamGuard ? \`
+                                <div class="detail-row">
+                                    <span class="detail-label">Требуется:</span>
+                                    <span>\${account.steamGuardType === 'mobile' ? '📱 Mobile Guard код' : '🔐 Steam Guard код'}</span>
                                 </div>
                                 \` : ''}
                                 \${account.rateLimit ? \`
@@ -1008,13 +1035,13 @@ function generateDashboardHTML() {
                             
                             \${account.needsSteamGuard && !account.rateLimit ? \`
                             <div class="\${account.steamGuardType === 'mobile' ? 'mobile-guard' : 'steam-guard'}-section">
-                                <p><strong>\${account.steamGuardType === 'mobile' ? '📱 Mobile Steam Guard' : '📧 Email Steam Guard'}</strong></p>
+                                <p><strong>\${account.steamGuardType === 'mobile' ? '📱 Mobile Steam Guard' : '🔐 Steam Guard'}</strong></p>
                                 <p style="font-size: 0.9rem; margin-bottom: 10px;">
                                     \${account.steamGuardType === 'mobile' ? 
                                       'Введите код из мобильного приложения Steam' : 
-                                      'Код отправлен на вашу почту'}
+                                      'Введите код Steam Guard'}
                                 </p>
-                                <button class="btn \${account.steamGuardType === 'mobile' ? 'btn-success' : 'btn-warning'}" onclick="showSteamGuardModal('\${account.id}', '\${account.displayName}', '\${account.steamGuardType}')" style="width: 100%;">
+                                <button class="btn \${account.steamGuardType === 'mobile' ? 'btn-success' : 'btn-warning'}" onclick="showSteamGuardModal('\${account.id}', '\${account.displayName}', '\${account.steamGuardType || 'email'}')" style="width: 100%;">
                                     <i class="fas fa-key"></i> Ввести код
                                 </button>
                             </div>
@@ -1049,25 +1076,21 @@ function generateDashboardHTML() {
                 }
             }
 
-            let currentGuardType = 'email';
-
             function showSteamGuardModal(accountId, accountName, guardType = 'email') {
-                currentGuardType = guardType;
-                
                 document.getElementById('steamGuardContent').innerHTML = \`
                     <div style="margin-bottom: 15px;">
-                        <p><strong>\${guardType === 'mobile' ? '📱 Mobile Steam Guard' : '📧 Email Steam Guard'}</strong></p>
+                        <p><strong>\${guardType === 'mobile' ? '📱 Mobile Steam Guard' : '🔐 Steam Guard'}</strong></p>
                         <p style="font-size: 0.9rem; color: var(--text-secondary);">
                             \${guardType === 'mobile' ? 
                               'Введите 5-значный код из мобильного приложения Steam' : 
-                              'Введите код, отправленный на вашу почту'}
+                              'Введите код Steam Guard'}
                         </p>
                     </div>
                     <div class="form-group">
                         <input type="text" id="steamGuardCode" placeholder="Введите 5-значный код" maxlength="5">
                     </div>
-                    <button class="btn \${guardType === 'mobile' ? 'btn-success' : 'btn-warning'}" onclick="submitSteamGuardCode('\${accountId}')" style="width: 100%;">
-                        <i class="fas fa-shield-alt"></i> Подтвердить \${guardType === 'mobile' ? 'Mobile' : 'Email'} код
+                    <button class="btn \${guardType === 'mobile' ? 'btn-success' : 'btn-warning'}" onclick="submitSteamGuardCode('\${accountId}', '\${guardType}')" style="width: 100%;">
+                        <i class="fas fa-shield-alt"></i> Подтвердить код
                     </button>
                     <p style="margin-top: 15px; font-size: 0.9rem; color: var(--text-secondary);">
                         <i class="fas fa-info-circle"></i> После ввода кода система автоматически перезапустит подключение
@@ -1076,7 +1099,7 @@ function generateDashboardHTML() {
                 document.getElementById('steamGuardModal').style.display = 'flex';
             }
 
-            async function submitSteamGuardCode(accountId) {
+            async function submitSteamGuardCode(accountId, guardType) {
                 const code = document.getElementById('steamGuardCode').value;
                 if (!code) {
                     dashboard.showNotification('Введите код Steam Guard', 'error');
@@ -1089,7 +1112,7 @@ function generateDashboardHTML() {
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({ 
                             code: code,
-                            guardType: currentGuardType 
+                            guardType: guardType 
                         })
                     });
                     
