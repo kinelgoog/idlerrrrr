@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Steam Hour Booster</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; }
+    button { padding: 0.5rem 1rem; margin: 0.5rem 0; }
+  </style>
+</head>
+<body>
+  <h1>Управление ботами</h1>
+  <button id="startBot">Запустить бота</button>
+  <button id="stopBot">Остановить бота</button>
+  <div id="status"></div>
+
+  <script>
+    async function api(path, method = 'GET', data) {
+      const res = await fetch('/api/' + path, {
+        method,
+        headers: data ? { 'Content-Type': 'application/json' } : undefined,
+        body: data ? JSON.stringify(data) : undefined
+      });
+      return res.json();
+    }
+
+    document.getElementById('startBot').addEventListener('click', async () => {
+      const r = await api('farm/start', 'POST');
+      document.getElementById('status').textContent = r.ok ? 'Бот запущен' : 'Ошибка';
+    });
+
+    document.getElementById('stopBot').addEventListener('click', async () => {
+      const r = await api('farm/stop', 'POST');
+      document.getElementById('status').textContent = r.ok ? 'Бот остановлен' : 'Ошибка';
+    });
+  </script>
+</body>
+</html>
+
