@@ -2,68 +2,36 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <title>Авторизация</title>
+  <title>Steam Hour Booster</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 2rem; }
-    input { display: block; margin: 0.5rem 0; padding: 0.5rem; width: 200px; }
-    button { padding: 0.5rem 1rem; }
-    .error { color: red; margin-top: 0.5rem; }
-    form { margin-bottom: 2rem; }
+    button { padding: 0.5rem 1rem; margin: 0.5rem 0; }
   </style>
 </head>
 <body>
-  <h1>Вход / Регистрация</h1>
-
-  <form id="loginForm">
-    <h2>Вход</h2>
-    <input type="text" name="username" placeholder="Имя пользователя" required />
-    <input type="password" name="password" placeholder="Пароль" required />
-    <button type="submit">Войти</button>
-    <div id="loginError" class="error"></div>
-  </form>
-
-  <form id="registerForm">
-    <h2>Регистрация</h2>
-    <input type="text" name="username" placeholder="Имя пользователя" required />
-    <input type="password" name="password" placeholder="Пароль" required />
-    <button type="submit">Зарегистрироваться</button>
-    <div id="registerError" class="error"></div>
-  </form>
+  <h1>Управление ботами</h1>
+  <button id="startBot">Запустить бота</button>
+  <button id="stopBot">Остановить бота</button>
+  <div id="status"></div>
 
   <script>
-    async function request(url, data) {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+    async function api(path, method = 'GET', data) {
+      const res = await fetch('/api/' + path, {
+        method,
+        headers: data ? { 'Content-Type': 'application/json' } : undefined,
+        body: data ? JSON.stringify(data) : undefined
       });
       return res.json();
     }
 
-    document.getElementById('loginForm').addEventListener('submit', async e => {
-      e.preventDefault();
-      const username = e.target.username.value;
-      const password = e.target.password.value;
-      const result = await request('/api/auth/login', { username, password });
-      if (result.ok) {
-        alert(`Вход успешен! Привет, ${result.user.username}`);
-        window.location.reload();
-      } else {
-        document.getElementById('loginError').textContent = result.error || 'Ошибка';
-      }
+    document.getElementById('startBot').addEventListener('click', async () => {
+      const r = await api('farm/start', 'POST');
+      document.getElementById('status').textContent = r.ok ? 'Бот запущен' : 'Ошибка';
     });
 
-    document.getElementById('registerForm').addEventListener('submit', async e => {
-      e.preventDefault();
-      const username = e.target.username.value;
-      const password = e.target.password.value;
-      const result = await request('/api/auth/register', { username, password });
-      if (result.ok) {
-        alert(`Регистрация успешна! Привет, ${result.user.username}`);
-        window.location.reload();
-      } else {
-        document.getElementById('registerError').textContent = result.error || 'Ошибка';
-      }
+    document.getElementById('stopBot').addEventListener('click', async () => {
+      const r = await api('farm/stop', 'POST');
+      document.getElementById('status').textContent = r.ok ? 'Бот остановлен' : 'Ошибка';
     });
   </script>
 </body>
