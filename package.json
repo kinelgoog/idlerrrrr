@@ -1,7 +1,7 @@
 {
   "name": "steam-hour-booster",
   "version": "1.0.0",
-  "description": "Steam Hour Booster - 24/7",
+  "description": "Steam Hour Booster - 24/7 (refactor)",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
@@ -19,7 +19,9 @@
     "steam-user": "^4.28.1",
     "sqlite3": "^5.1.6",
     "helmet": "^7.0.0",
-    "express-rate-limit": "^6.8.1"
+    "express-rate-limit": "^6.8.1",
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5"
   },
   "engines": {
     "node": ">=18.0.0"
