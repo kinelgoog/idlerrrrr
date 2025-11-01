@@ -1,26 +1,37 @@
 const express = require('express');
 const steamUser = require('steam-user');
-const steamTotp = require('steam-totp');
 const fetch = require('node-fetch');
 const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// 🎯 Конфигурация администратора
-const ADMIN_CONFIG = {
-    username: process.env.ADMIN_USERNAME || 'admin',
-    password: process.env.ADMIN_PASSWORD || 'admin123'
-};
-
-console.log('🔐 Данные администратора для удаления аккаунтов:');
-console.log(`👤 Логин: ${ADMIN_CONFIG.username}`);
-console.log(`🔑 Пароль: ${ADMIN_CONFIG.password}`);
-
-// 🎯 Основная конфигурация
-const CONFIG = {
-    UPDATE_INTERVAL: parseInt(process.env.UPDATE_INTERVAL) || 30000,
-    MAX_GAMES: 32
+// 🎯 Предустановленные аккаунты
+const DEFAULT_ACCOUNTS = {
+    'acc_1': {
+        id: 'acc_1',
+        username: 'tochka_bi_laik',
+        password: 'JenyaKinel2023steam',
+        displayName: 'точка',
+        steamId: '1',
+        games: '730',
+        guardType: 'none', // Без защиты
+        farmedHours: '0.0',
+        farmStatus: 'stopped',
+        botStatus: 'offline'
+    },
+    'acc_2': {
+        id: 'acc_2', 
+        username: 'k1nelsteam',
+        password: 'JenyaKinel2023steam',
+        displayName: 'кинелька',
+        steamId: '2',
+        games: '730',
+        guardType: 'SGM', // Steam Guard Mobile
+        farmedHours: '0.0',
+        farmStatus: 'stopped',
+        botStatus: 'offline'
+    }
 };
 
 // 🗄️ Хранение данных
@@ -33,9 +44,9 @@ function loadAccounts() {
             return JSON.parse(data);
         }
     } catch (error) {
-        console.log('❌ Ошибка загрузки аккаунтов:', error.message);
+        console.log('❌ Ошибка загрузки аккаунтов, использую предустановленные');
     }
-    return {};
+    return DEFAULT_ACCOUNTS;
 }
 
 function saveAccounts(accounts) {
@@ -43,388 +54,133 @@ function saveAccounts(accounts) {
         fs.writeFileSync(DATA_FILE, JSON.stringify(accounts, null, 2));
         return true;
     } catch (error) {
-        console.log('❌ Ошибка сохранения аккаунтов:', error.message);
+        console.log('❌ Ошибка сохранения аккаунтов');
         return false;
     }
 }
 
 let accounts = loadAccounts();
 
-// 🕒 Трекер времени фарма
-class FarmTimeTracker {
-    constructor() {
-        this.startTime = null;
-        this.totalAccumulated = 0;
-    }
-
-    start() {
-        this.startTime = new Date();
-    }
-
-    stop() {
-        if (this.startTime) {
-            const sessionSeconds = Math.floor((new Date() - this.startTime) / 1000);
-            this.totalAccumulated += sessionSeconds;
-            this.startTime = null;
-        }
-    }
-
-    getCurrentHours() {
-        let totalSeconds = this.totalAccumulated;
-        
-        if (this.startTime) {
-            const currentSessionSeconds = Math.floor((new Date() - this.startTime) / 1000);
-            totalSeconds += currentSessionSeconds;
-        }
-        
-        return (totalSeconds / 3600).toFixed(1);
-    }
-}
-
-// 🤖 ИСПРАВЛЕННЫЙ Steam Bot с правильным определением Mobile Guard
+// 🤖 Простой Steam Bot
 class SteamFarmBot {
     constructor(accountConfig) {
         this.config = accountConfig;
-        this.client = new steamUser({
-            enablePicsCache: true,
-            autoRelogin: false,
-            dataDirectory: `./steamdata_${accountConfig.id}`
-        });
+        this.client = new steamUser();
         this.isRunning = false;
-        this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 1;
-        this.farmTracker = new FarmTimeTracker();
         this.steamGuardCallback = null;
-        this.isWaitingForGuard = false;
-        this.lastConnectionAttempt = 0;
-        this.connectionTimeout = null;
-        this.guardType = null; // 🔥 Храним тип Guard
         this.setupEventHandlers();
     }
 
     setupEventHandlers() {
         this.client.on('loggedOn', () => {
             console.log(`✅ Бот ${this.config.displayName} успешно вошел в систему`);
-            this.reconnectAttempts = 0;
-            this.isWaitingForGuard = false;
-            this.guardType = null;
             
-            const games = this.parseGames(this.config.games);
-            console.log(`🎮 Запускаю фарм ${games.length} игр для ${this.config.displayName}:`, games);
-            
+            const games = this.config.games.split(' ').map(g => parseInt(g)).filter(g => !isNaN(g));
             this.client.setPersona(1);
-            this.client.gamesPlayed(games, true);
+            this.client.gamesPlayed(games);
             
-            this.farmTracker.start();
             this.isRunning = true;
             
             if (accounts[this.config.id]) {
                 accounts[this.config.id].farmStatus = 'running';
                 accounts[this.config.id].botStatus = 'online';
-                accounts[this.config.id].farmStartTime = new Date();
-                accounts[this.config.id].currentGames = games;
-                accounts[this.config.id].needsSteamGuard = false;
-                accounts[this.config.id].steamGuardType = null;
-                accounts[this.config.id].error = null;
-                accounts[this.config.id].rateLimit = false;
                 saveAccounts(accounts);
             }
         });
 
-        // 🔥 УЛУЧШЕННЫЙ обработчик Steam Guard
-        this.client.on('steamGuard', (domain, callback, lastCodeWrong) => {
+        this.client.on('steamGuard', (domain, callback) => {
             console.log(`🔐 Steam Guard запрос для ${this.config.displayName}`);
-            console.log(`📧 Домен: ${domain}`);
-            console.log(`❓ Неверный предыдущий код: ${lastCodeWrong}`);
-            
-            this.isWaitingForGuard = true;
             this.steamGuardCallback = callback;
-            
-            // 🔥 ПРАВИЛЬНОЕ ОПРЕДЕЛЕНИЕ ТИПА GUARD
-            let guardType = 'email';
-            if (!domain || domain === '' || domain === 'mobile') {
-                guardType = 'mobile';
-                console.log(`📱 Определен Mobile Steam Guard для ${this.config.displayName}`);
-            } else {
-                console.log(`📧 Определен Email Steam Guard для ${this.config.displayName}, домен: ${domain}`);
-            }
-            
-            this.guardType = guardType;
             
             if (accounts[this.config.id]) {
                 accounts[this.config.id].botStatus = 'steam_guard';
-                accounts[this.config.id].farmStatus = 'waiting';
-                accounts[this.config.id].needsSteamGuard = true;
-                accounts[this.config.id].steamGuardType = guardType;
-                accounts[this.config.id].steamGuardDomain = domain;
-                accounts[this.config.id].lastCodeWrong = lastCodeWrong || false;
-                accounts[this.config.id].error = null;
-                accounts[this.config.id].rateLimit = false;
+                accounts[this.config.id].needsGuardCode = true;
                 saveAccounts(accounts);
             }
         });
 
         this.client.on('error', (err) => {
             console.log(`❌ Ошибка бота ${this.config.displayName}:`, err.message);
-            
             this.isRunning = false;
-            this.isWaitingForGuard = false;
-            this.guardType = null;
             
             if (accounts[this.config.id]) {
                 accounts[this.config.id].botStatus = 'error';
                 accounts[this.config.id].farmStatus = 'stopped';
                 accounts[this.config.id].error = err.message;
-                
-                // 🔥 ПРИ ОШИБКЕ InvalidPassword ПРЕДПОЛАГАЕМ MOBILE GUARD
-                if (err.message.includes('InvalidPassword') || err.eresult === 5) {
-                    accounts[this.config.id].needsSteamGuard = true;
-                    accounts[this.config.id].steamGuardType = 'mobile'; // Предполагаем mobile по умолчанию
-                    console.log(`📱 Предполагаем Mobile Guard для ${this.config.displayName} из-за ошибки InvalidPassword`);
-                } else if (err.message.includes('RateLimitExceeded') || err.eresult === 84) {
-                    accounts[this.config.id].needsSteamGuard = false;
-                    accounts[this.config.id].rateLimit = true;
-                    accounts[this.config.id].rateLimitUntil = Date.now() + 3600000;
-                    console.log(`🚫 RateLimit для ${this.config.displayName}. Блокировка на 1 час.`);
-                } else {
-                    accounts[this.config.id].needsSteamGuard = false;
-                    accounts[this.config.id].steamGuardType = null;
-                    accounts[this.config.id].rateLimit = false;
-                }
                 saveAccounts(accounts);
             }
-
-            this.farmTracker.stop();
-            this.clearConnectionTimeout();
         });
 
-        this.client.on('disconnected', (eresult, msg) => {
-            console.log(`🔌 Бот ${this.config.displayName} отключен:`, eresult, msg);
-            this.farmTracker.stop();
+        this.client.on('disconnected', () => {
+            console.log(`🔌 Бот ${this.config.displayName} отключен`);
             this.isRunning = false;
-            this.isWaitingForGuard = false;
             
             if (accounts[this.config.id]) {
                 accounts[this.config.id].botStatus = 'offline';
                 accounts[this.config.id].farmStatus = 'stopped';
-                
-                // 🔥 ПРИ ОТКЛЮЧЕНИИ ИЗ-ЗА AUTH ПРЕДПОЛАГАЕМ MOBILE GUARD
-                if (eresult === 5) { // InvalidPassword
-                    accounts[this.config.id].needsSteamGuard = true;
-                    accounts[this.config.id].steamGuardType = 'mobile';
-                    console.log(`📱 Предполагаем Mobile Guard для ${this.config.displayName} из-за отключения с InvalidPassword`);
-                } else if (eresult === 84) { // RateLimitExceeded
-                    accounts[this.config.id].rateLimit = true;
-                    accounts[this.config.id].rateLimitUntil = Date.now() + 3600000;
-                }
                 saveAccounts(accounts);
             }
-            
-            this.clearConnectionTimeout();
         });
-
-        setInterval(() => {
-            if (this.isRunning) {
-                const games = this.parseGames(this.config.games);
-                this.client.gamesPlayed(games, true);
-            }
-        }, 300000);
     }
 
-    parseGames(gamesString) {
-        if (!gamesString) return [730];
-        
-        return gamesString
-            .split(' ')
-            .map(game => parseInt(game.trim()))
-            .filter(game => !isNaN(game) && game > 0)
-            .slice(0, CONFIG.MAX_GAMES);
-    }
-
-    clearConnectionTimeout() {
-        if (this.connectionTimeout) {
-            clearTimeout(this.connectionTimeout);
-            this.connectionTimeout = null;
-        }
-    }
-
-    // 🔥 УЛУЧШЕННАЯ отправка Steam Guard кода
     submitSteamGuardCode(code) {
-        if (this.steamGuardCallback && typeof this.steamGuardCallback === 'function') {
-            console.log(`🔐 Отправка Steam Guard кода для ${this.config.displayName}: ${code}`);
-            
+        if (this.steamGuardCallback) {
+            console.log(`🔐 Отправка Steam Guard кода для ${this.config.displayName}`);
             this.steamGuardCallback(code);
             this.steamGuardCallback = null;
-            this.isWaitingForGuard = false;
-            this.guardType = null;
             
             if (accounts[this.config.id]) {
-                accounts[this.config.id].needsSteamGuard = false;
-                accounts[this.config.id].steamGuardType = null;
-                accounts[this.config.id].lastCodeWrong = false;
+                accounts[this.config.id].needsGuardCode = false;
                 saveAccounts(accounts);
             }
             return true;
-        } else {
-            console.log(`❌ Нет активного Steam Guard запроса для ${this.config.displayName}`);
-            return false;
         }
-    }
-
-    // 🔥 УЛУЧШЕННАЯ отправка Two-Factor кода
-    submitTwoFactorCode(code) {
-        console.log(`🔐 Отправка Two-Factor кода для ${this.config.displayName}: ${code}`);
-        
-        // Переподключаемся с twoFactorCode
-        const logOnOptions = {
-            accountName: this.config.username,
-            password: this.config.password,
-            twoFactorCode: code
-        };
-        
-        this.client.logOn(logOnOptions);
-        this.isWaitingForGuard = false;
-        this.guardType = null;
-        
-        if (accounts[this.config.id]) {
-            accounts[this.config.id].needsSteamGuard = false;
-            accounts[this.config.id].steamGuardType = null;
-            saveAccounts(accounts);
-        }
-        return true;
+        return false;
     }
 
     startFarming() {
-        if (this.isRunning) {
-            console.log(`⚠️ Бот ${this.config.displayName} уже запущен`);
-            return;
-        }
-
-        // Проверяем RateLimit
-        const account = accounts[this.config.id];
-        if (account && account.rateLimit && account.rateLimitUntil > Date.now()) {
-            const remainingTime = Math.ceil((account.rateLimitUntil - Date.now()) / 60000);
-            console.log(`🚫 ${this.config.displayName} заблокирован RateLimit. Осталось: ${remainingTime} мин`);
-            
-            if (account) {
-                account.error = `RateLimit заблокирован. Ожидание ${remainingTime} мин`;
-                saveAccounts(accounts);
-            }
-            return;
-        }
-
-        // Проверяем время с последней попытки подключения
-        const timeSinceLastAttempt = Date.now() - this.lastConnectionAttempt;
-        if (timeSinceLastAttempt < 30000) {
-            const waitTime = Math.ceil((30000 - timeSinceLastAttempt) / 1000);
-            console.log(`⏳ Слишком частые попытки подключения для ${this.config.displayName}. Ждем ${waitTime} сек`);
-            return;
-        }
+        if (this.isRunning) return;
 
         console.log(`🚀 Запуск бота для ${this.config.displayName}...`);
-        this.lastConnectionAttempt = Date.now();
         
         const logOnOptions = {
             accountName: this.config.username,
             password: this.config.password
         };
 
-        // 🔥 ДОБАВЛЯЕМ ПОДДЕРЖКУ SHARED SECRET
-        if (account && account.sharedSecret) {
-            try {
-                const twoFactorCode = steamTotp.generateAuthCode(account.sharedSecret);
-                logOnOptions.twoFactorCode = twoFactorCode;
-                console.log(`📱 Используется Two-Factor код из Shared Secret для ${this.config.displayName}`);
-            } catch (error) {
-                console.log(`❌ Ошибка генерации Two-Factor кода: ${error.message}`);
-            }
-        }
-
-        if (account) {
-            account.farmStatus = 'starting';
-            account.botStatus = 'connecting';
-            account.error = null;
-            account.rateLimit = false;
-            // 🔥 СБРАСЫВАЕМ ТИП GUARD ПЕРЕД ЗАПУСКОМ
-            account.steamGuardType = null;
-            account.needsSteamGuard = false;
+        if (accounts[this.config.id]) {
+            accounts[this.config.id].farmStatus = 'starting';
+            accounts[this.config.id].botStatus = 'connecting';
+            accounts[this.config.id].error = null;
             saveAccounts(accounts);
         }
-
-        this.clearConnectionTimeout();
-        
-        this.connectionTimeout = setTimeout(() => {
-            if (!this.isRunning && !this.isWaitingForGuard) {
-                console.log(`⏰ Таймаут подключения для ${this.config.displayName}`);
-                if (account) {
-                    account.botStatus = 'timeout';
-                    account.error = 'Таймаут подключения';
-                    saveAccounts(accounts);
-                }
-            }
-        }, 30000);
 
         this.client.logOn(logOnOptions);
     }
 
     stopFarming() {
-        if (this.isRunning || this.isWaitingForGuard) {
+        if (this.isRunning) {
             console.log(`🛑 Останавливаю фарм для ${this.config.displayName}...`);
             this.client.logOff();
             this.isRunning = false;
-            this.isWaitingForGuard = false;
             this.steamGuardCallback = null;
-            this.guardType = null;
-            this.farmTracker.stop();
-            this.reconnectAttempts = 0;
-            this.clearConnectionTimeout();
             
             if (accounts[this.config.id]) {
                 accounts[this.config.id].farmStatus = 'stopped';
                 accounts[this.config.id].botStatus = 'offline';
-                accounts[this.config.id].needsSteamGuard = false;
-                accounts[this.config.id].steamGuardType = null;
-                accounts[this.config.id].rateLimit = false;
+                accounts[this.config.id].needsGuardCode = false;
                 saveAccounts(accounts);
             }
         }
     }
 
     getStatus() {
-        const account = accounts[this.config.id];
-        const games = this.parseGames(this.config.games);
-        
-        let rateLimitActive = false;
-        let rateLimitRemaining = 0;
-        
-        if (account && account.rateLimit && account.rateLimitUntil) {
-            if (account.rateLimitUntil > Date.now()) {
-                rateLimitActive = true;
-                rateLimitRemaining = Math.ceil((account.rateLimitUntil - Date.now()) / 60000);
-            } else {
-                account.rateLimit = false;
-                account.rateLimitUntil = null;
-                saveAccounts(accounts);
-            }
-        }
-        
-        // 🔥 ИСПОЛЬЗУЕМ ТЕКУЩИЙ ТИП GUARD ИЛИ ИЗ АККАУНТА
-        const currentGuardType = this.guardType || account?.steamGuardType;
-        
         return {
             isRunning: this.isRunning,
-            farmStatus: this.isRunning ? 'running' : (this.isWaitingForGuard ? 'waiting' : 'stopped'),
-            farmedHours: this.farmTracker.getCurrentHours(),
-            botStatus: account?.botStatus || 'offline',
-            currentGames: games,
-            needsSteamGuard: this.isWaitingForGuard || account?.needsSteamGuard || false,
-            steamGuardType: currentGuardType,
-            steamGuardDomain: account?.steamGuardDomain || null,
-            lastCodeWrong: account?.lastCodeWrong || false,
-            error: account?.error || null,
-            rateLimit: rateLimitActive,
-            rateLimitRemaining: rateLimitRemaining,
-            hasSharedSecret: !!(account?.sharedSecret)
+            farmStatus: this.isRunning ? 'running' : 'stopped',
+            botStatus: accounts[this.config.id]?.botStatus || 'offline',
+            needsGuardCode: accounts[this.config.id]?.needsGuardCode || false,
+            error: accounts[this.config.id]?.error || null
         };
     }
 }
@@ -470,119 +226,19 @@ class BotManager {
         return false;
     }
 
-    submitTwoFactorCode(accountId, code) {
-        const bot = this.bots.get(accountId);
-        if (bot) {
-            return bot.submitTwoFactorCode(code);
-        }
-        return false;
-    }
-
     getStatus(accountId) {
         const bot = this.bots.get(accountId);
         return bot ? bot.getStatus() : {
             isRunning: false,
             farmStatus: 'stopped',
-            farmedHours: '0.0',
             botStatus: 'offline',
-            currentGames: [],
-            needsSteamGuard: false,
-            steamGuardType: null,
-            steamGuardDomain: null,
-            lastCodeWrong: false,
-            error: null,
-            rateLimit: false,
-            rateLimitRemaining: 0,
-            hasSharedSecret: false
+            needsGuardCode: false,
+            error: null
         };
     }
 }
 
 const botManager = new BotManager();
-
-// 🔍 Класс для получения данных Steam
-class SteamDataFetcher {
-    static async fetchGameHours(steamId, gameId) {
-        try {
-            const response = await fetch(`https://steamcommunity.com/profiles/${steamId}/games/?tab=all`, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                },
-                timeout: 10000
-            });
-
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const html = await response.text();
-
-            const jsonRegex = /var rgGames = (\[.*?\]);/;
-            const jsonMatch = html.match(jsonRegex);
-            
-            if (jsonMatch) {
-                try {
-                    const gamesData = JSON.parse(jsonMatch[1]);
-                    const game = gamesData.find(g => g.appid === gameId);
-                    
-                    if (game && game.hours_forever) {
-                        return parseFloat(game.hours_forever).toFixed(1);
-                    }
-                } catch (e) {
-                    console.log('JSON parse error:', e.message);
-                }
-            }
-
-            return '0.0';
-        } catch (error) {
-            console.log('Ошибка получения данных Steam:', error.message);
-            return '0.0';
-        }
-    }
-}
-
-// 🔄 Обновление данных аккаунта
-async function updateAccountData(accountId) {
-    const account = accounts[accountId];
-    if (!account) return;
-
-    try {
-        account.isLoading = true;
-        account.error = null;
-        
-        console.log(`🔄 Обновление данных для ${account.displayName}...`);
-        
-        const games = account.games ? account.games.split(' ').map(g => parseInt(g.trim())).filter(g => !isNaN(g)) : [730];
-        const hoursData = {};
-        
-        for (const gameId of games.slice(0, 3)) {
-            const hours = await SteamDataFetcher.fetchGameHours(account.steamId, gameId);
-            hoursData[gameId] = hours;
-        }
-        
-        account.gameHours = hoursData;
-        account.lastUpdate = new Date();
-        account.isLoading = false;
-        
-        saveAccounts(accounts);
-        console.log(`✅ Данные обновлены для ${account.displayName}`);
-        
-    } catch (error) {
-        account.error = error.message;
-        account.isLoading = false;
-        saveAccounts(accounts);
-        console.log(`❌ Ошибка обновления для ${account.displayName}: ${error.message}`);
-    }
-}
-
-// 📊 Обновление глобальной статистики
-function updateGlobalStats() {
-    const accountList = Object.values(accounts);
-    return {
-        totalAccounts: accountList.length,
-        activeFarms: accountList.filter(acc => acc.farmStatus === 'running').length,
-        totalFarmedHours: accountList.reduce((sum, acc) => sum + parseFloat(acc.farmedHours || 0), 0).toFixed(1),
-        steamGuardPending: accountList.filter(acc => acc.needsSteamGuard).length,
-        rateLimited: accountList.filter(acc => acc.rateLimit && acc.rateLimitUntil > Date.now()).length
-    };
-}
 
 // 🚀 Express настройки
 app.use(express.json());
@@ -599,16 +255,8 @@ app.get('/api/status', (req, res) => {
         if (botStatus) {
             accounts[accountId].farmStatus = botStatus.farmStatus;
             accounts[accountId].botStatus = botStatus.botStatus;
-            accounts[accountId].farmedHours = botStatus.farmedHours;
-            accounts[accountId].needsSteamGuard = botStatus.needsSteamGuard;
-            accounts[accountId].steamGuardType = botStatus.steamGuardType;
-            accounts[accountId].steamGuardDomain = botStatus.steamGuardDomain;
-            accounts[accountId].currentGames = botStatus.currentGames;
-            accounts[accountId].lastCodeWrong = botStatus.lastCodeWrong;
+            accounts[accountId].needsGuardCode = botStatus.needsGuardCode;
             accounts[accountId].error = botStatus.error;
-            accounts[accountId].rateLimit = botStatus.rateLimit;
-            accounts[accountId].rateLimitRemaining = botStatus.rateLimitRemaining;
-            accounts[accountId].hasSharedSecret = botStatus.hasSharedSecret;
         }
     });
     
@@ -616,16 +264,15 @@ app.get('/api/status', (req, res) => {
     
     res.json({
         accounts: accounts,
-        globalStats: updateGlobalStats(),
         serverTime: new Date()
     });
 });
 
 app.post('/api/accounts/add', (req, res) => {
-    const { username, password, displayName, steamId, games, sharedSecret } = req.body;
+    const { username, password, displayName, steamId, games, guardType } = req.body;
     
     if (!username || !password || !displayName || !steamId) {
-        return res.status(400).json({ error: 'Все обязательные поля должны быть заполнены' });
+        return res.status(400).json({ error: 'Все поля обязательны' });
     }
 
     const accountId = 'acc_' + Date.now();
@@ -637,37 +284,23 @@ app.post('/api/accounts/add', (req, res) => {
         displayName,
         steamId,
         games: games || '730',
-        sharedSecret: sharedSecret || '',
+        guardType: guardType || 'none',
         farmedHours: '0.0',
         farmStatus: 'stopped',
         botStatus: 'offline',
-        lastUpdate: null,
-        needsSteamGuard: false,
-        steamGuardType: null,
-        currentGames: [],
-        rateLimit: false,
-        rateLimitRemaining: 0,
-        createdAt: new Date()
+        needsGuardCode: false
     };
 
     if (saveAccounts(accounts)) {
-        console.log(`✅ Добавлен новый аккаунт: ${displayName} (${username})`);
-        if (sharedSecret) {
-            console.log(`📱 Аккаунт использует Mobile Steam Guard (Shared Secret)`);
-        }
+        console.log(`✅ Добавлен аккаунт: ${displayName}`);
         res.json({ success: true, message: 'Аккаунт добавлен', accountId });
     } else {
-        res.status(500).json({ error: 'Ошибка сохранения аккаунта' });
+        res.status(500).json({ error: 'Ошибка сохранения' });
     }
 });
 
 app.post('/api/accounts/delete/:accountId', (req, res) => {
     const { accountId } = req.params;
-    const { adminUsername, adminPassword } = req.body;
-    
-    if (adminUsername !== ADMIN_CONFIG.username || adminPassword !== ADMIN_CONFIG.password) {
-        return res.status(401).json({ error: 'Неверные учетные данные администратора' });
-    }
     
     if (accounts[accountId]) {
         const accountName = accounts[accountId].displayName;
@@ -675,10 +308,10 @@ app.post('/api/accounts/delete/:accountId', (req, res) => {
         delete accounts[accountId];
         
         if (saveAccounts(accounts)) {
-            console.log(`🗑️ Удален аккаунт: ${accountName} (ID: ${accountId})`);
+            console.log(`🗑️ Удален аккаунт: ${accountName}`);
             res.json({ success: true, message: 'Аккаунт удален' });
         } else {
-            res.status(500).json({ error: 'Ошибка сохранения изменений' });
+            res.status(500).json({ error: 'Ошибка сохранения' });
         }
     } else {
         res.status(404).json({ error: 'Аккаунт не найден' });
@@ -689,7 +322,7 @@ app.post('/api/farm/start/:accountId', (req, res) => {
     const { accountId } = req.params;
     
     if (botManager.startFarm(accountId)) {
-        console.log(`🎮 Запущен фарм для аккаунта: ${accounts[accountId]?.displayName}`);
+        console.log(`🎮 Запущен фарм: ${accounts[accountId]?.displayName}`);
         res.json({ success: true, message: 'Фарм запущен' });
     } else {
         res.status(404).json({ error: 'Аккаунт не найден' });
@@ -700,57 +333,33 @@ app.post('/api/farm/stop/:accountId', (req, res) => {
     const { accountId } = req.params;
     
     if (botManager.stopFarm(accountId)) {
-        console.log(`⏹️ Остановлен фарм для аккаунта: ${accounts[accountId]?.displayName}`);
+        console.log(`⏹️ Остановлен фарм: ${accounts[accountId]?.displayName}`);
         res.json({ success: true, message: 'Фарм остановлен' });
     } else {
         res.status(404).json({ error: 'Аккаунт не найден' });
     }
 });
 
-// 🔥 ОБНОВЛЕННЫЙ Steam Guard endpoint
 app.post('/api/steam-guard/:accountId', (req, res) => {
     const { accountId } = req.params;
-    const { code, guardType } = req.body;
+    const { code } = req.body;
     
     if (!code) {
-        return res.status(400).json({ error: 'Код обязателен' });
+        return res.status(400).json({ error: 'Введите код' });
     }
     
-    console.log(`🔐 Получен ${guardType || 'Steam Guard'} код для ${accountId}: ${code}`);
+    console.log(`🔐 Отправка кода для ${accountId}: ${code}`);
     
-    let success = false;
-    
-    // 🔥 ВЫБИРАЕМ ПРАВИЛЬНЫЙ МЕТОД
-    if (guardType === 'mobile') {
-        success = botManager.submitTwoFactorCode(accountId, code);
-    } else {
-        success = botManager.submitSteamGuardCode(accountId, code);
-    }
-    
-    if (success) {
+    if (botManager.submitSteamGuardCode(accountId, code)) {
         console.log(`✅ Код отправлен для: ${accounts[accountId]?.displayName}`);
-        
-        // Перезапускаем фарм
-        setTimeout(() => {
-            botManager.startFarm(accountId);
-        }, 3000);
-        
-        res.json({ success: true, message: 'Код отправлен, перезапускаем подключение...' });
+        res.json({ success: true, message: 'Код отправлен' });
     } else {
-        console.log(`❌ Не удалось отправить код для: ${accounts[accountId]?.displayName}`);
-        res.status(400).json({ error: 'Не удалось отправить код. Попробуйте остановить и запустить фарм снова.' });
+        res.status(400).json({ error: 'Ошибка отправки кода' });
     }
 });
 
-app.post('/api/update/:accountId', async (req, res) => {
-    const { accountId } = req.params;
-    await updateAccountData(accountId);
-    res.json({ success: true, message: 'Данные обновлены' });
-});
-
-// 🎨 Генерация HTML
+// 🎨 Простой HTML
 function generateDashboardHTML() {
-    const globalStats = updateGlobalStats();
     const accountList = Object.values(accounts);
     
     return `
@@ -759,56 +368,35 @@ function generateDashboardHTML() {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Steam Hour Booster</title>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+        <title>Steam Booster</title>
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            :root {
-                --primary: #8B5CF6; --secondary: #3B82F6; --danger: #EF4444; 
-                --warning: #F59E0B; --success: #10B981; --background: #0F172A; 
-                --surface: rgba(30, 41, 59, 0.8); --text: #F8FAFC; --text-secondary: #94A3B8; 
-                --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
-            }
-            body { font-family: 'Inter', sans-serif; background: var(--background); color: var(--text); }
-            .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+            body { font-family: Arial, sans-serif; background: #0f172a; color: white; padding: 20px; }
             .header { text-align: center; margin-bottom: 30px; }
-            .header h1 { font-size: 2.5rem; font-weight: 700; background: var(--gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-            .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px; }
-            .stat-card { background: var(--surface); padding: 20px; border-radius: 15px; text-align: center; border-left: 4px solid var(--primary); }
-            .stat-value { font-size: 2rem; font-weight: 700; margin-bottom: 5px; }
-            .stat-label { color: var(--text-secondary); font-size: 0.9rem; }
-            .btn { padding: 12px 20px; border: none; border-radius: 10px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; gap: 8px; margin: 5px; }
-            .btn-primary { background: var(--gradient); color: white; }
-            .btn-success { background: var(--success); color: white; }
-            .btn-danger { background: var(--danger); color: white; }
-            .btn-warning { background: var(--warning); color: black; }
-            .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
-            .btn:hover:not(:disabled) { transform: translateY(-2px); }
-            .accounts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 20px; }
-            .account-card { background: var(--surface); padding: 20px; border-radius: 15px; border-left: 4px solid var(--primary); }
-            .account-card.steam-guard { border-left-color: var(--warning); background: rgba(245, 158, 11, 0.1); }
-            .account-card.mobile-guard { border-left-color: var(--success); background: rgba(16, 185, 129, 0.1); }
-            .account-card.error { border-left-color: var(--danger); background: rgba(239, 68, 68, 0.1); }
-            .account-card.rate-limit { border-left-color: #6B7280; background: rgba(107, 114, 128, 0.1); }
-            .account-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-            .account-name { font-weight: 700; font-size: 1.2rem; }
-            .account-status { padding: 5px 10px; border-radius: 8px; font-size: 0.8rem; font-weight: 600; }
-            .status-steam_guard { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
-            .status-mobile_guard { background: rgba(16, 185, 129, 0.2); color: var(--success); }
-            .status-error { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
-            .status-rate_limit { background: rgba(107, 114, 128, 0.2); color: #6B7280; }
-            .account-details { margin-bottom: 15px; font-size: 0.9rem; }
+            .header h1 { font-size: 2.5rem; color: #8b5cf6; margin-bottom: 10px; }
+            .accounts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
+            .account-card { background: #1e293b; padding: 20px; border-radius: 10px; border-left: 4px solid #8b5cf6; }
+            .account-header { display: flex; justify-content: space-between; margin-bottom: 15px; }
+            .account-name { font-size: 1.3rem; font-weight: bold; }
+            .account-status { padding: 5px 10px; border-radius: 5px; font-size: 0.8rem; }
+            .status-online { background: #10b981; }
+            .status-steam_guard { background: #f59e0b; }
+            .status-error { background: #ef4444; }
+            .status-offline { background: #6b7280; }
+            .account-details { margin-bottom: 15px; }
             .detail-row { display: flex; justify-content: space-between; margin-bottom: 5px; }
-            .detail-label { color: var(--text-secondary); }
-            .steam-guard-section { background: rgba(245, 158, 11, 0.2); padding: 15px; border-radius: 10px; margin: 10px 0; }
-            .mobile-guard-section { background: rgba(16, 185, 129, 0.2); padding: 15px; border-radius: 10px; margin: 10px 0; }
-            .rate-limit-section { background: rgba(107, 114, 128, 0.2); padding: 15px; border-radius: 10px; margin: 10px 0; }
-            .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; }
-            .modal-content { background: var(--surface); padding: 30px; border-radius: 15px; max-width: 400px; width: 90%; }
+            .detail-label { color: #94a3b8; }
+            .btn { padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; margin: 5px; color: white; }
+            .btn-success { background: #10b981; }
+            .btn-danger { background: #ef4444; }
+            .btn-warning { background: #f59e0b; }
+            .btn-primary { background: #8b5cf6; }
+            .steam-guard-section { background: #f59e0b20; padding: 15px; border-radius: 5px; margin: 10px 0; }
+            .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); align-items: center; justify-content: center; }
+            .modal-content { background: #1e293b; padding: 30px; border-radius: 10px; max-width: 400px; width: 90%; }
             .form-group { margin-bottom: 15px; }
-            .form-group input { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--text-secondary); background: rgba(255,255,255,0.1); color: var(--text); }
-            .notification { position: fixed; top: 20px; right: 20px; padding: 15px; border-radius: 10px; background: var(--surface); transform: translateX(400px); transition: transform 0.3s ease; }
+            .form-group input { width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #374151; background: #0f172a; color: white; }
+            .notification { position: fixed; top: 20px; right: 20px; padding: 15px; background: #1e293b; border-radius: 5px; transform: translateX(400px); transition: transform 0.3s; }
             .notification.show { transform: translateX(0); }
         </style>
     </head>
@@ -817,130 +405,65 @@ function generateDashboardHTML() {
         
         <div id="steamGuardModal" class="modal">
             <div class="modal-content">
-                <h3><i class="fas fa-shield-alt"></i> Steam Guard</h3>
+                <h3>🔐 Steam Guard код</h3>
                 <div id="steamGuardContent"></div>
             </div>
         </div>
 
-        <div class="container">
-            <div class="header">
-                <h1><i class="fas fa-robot"></i> Steam Hour Booster</h1>
-                <button class="btn btn-primary" onclick="showAddAccountModal()">
-                    <i class="fas fa-plus"></i> Добавить аккаунт
-                </button>
-            </div>
-            
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-value" id="total-accounts">${globalStats.totalAccounts}</div>
-                    <div class="stat-label">Аккаунтов</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="active-farms">${globalStats.activeFarms}</div>
-                    <div class="stat-label">Активных фармов</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="steam-guard-pending">${globalStats.steamGuardPending}</div>
-                    <div class="stat-label">Ожидают Steam Guard</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value" id="rate-limited">${globalStats.rateLimited}</div>
-                    <div class="stat-label">Заблокированы</div>
-                </div>
-            </div>
-            
-            <div class="accounts-grid" id="accounts-container">
-                ${accountList.map(account => `
-                    <div class="account-card ${account.rateLimit ? 'rate-limit' : account.steamGuardType === 'mobile' ? 'mobile-guard' : account.needsSteamGuard ? 'steam-guard' : ''} ${account.error ? 'error' : ''}">
-                        <div class="account-header">
-                            <div class="account-name">${account.displayName}</div>
-                            <div class="account-status status-${account.rateLimit ? 'rate_limit' : account.steamGuardType === 'mobile' ? 'mobile_guard' : account.botStatus}">
-                                ${account.rateLimit ? 'Заблокирован' : 
-                                  account.steamGuardType === 'mobile' ? 'Mobile Guard' :
-                                  account.botStatus === 'steam_guard' ? 'Steam Guard' : 
-                                  account.botStatus === 'error' ? 'Ошибка' : account.botStatus}
-                            </div>
-                        </div>
-                        
-                        <div class="account-details">
-                            <div class="detail-row">
-                                <span class="detail-label">Логин:</span>
-                                <span>${account.username}</span>
-                            </div>
-                            <div class="detail-row">
-                                <span class="detail-label">Игры:</span>
-                                <span>${account.games || '730'}</span>
-                            </div>
-                            ${account.hasSharedSecret ? `
-                            <div class="detail-row">
-                                <span class="detail-label">Тип аутентификации:</span>
-                                <span style="color: var(--success);">📱 Mobile Guard (Shared Secret)</span>
-                            </div>
-                            ` : ''}
-                            ${account.steamGuardType && account.needsSteamGuard ? `
-                            <div class="detail-row">
-                                <span class="detail-label">Требуется:</span>
-                                <span>${account.steamGuardType === 'mobile' ? '📱 Mobile Guard код' : '📧 Email Guard код'}</span>
-                            </div>
-                            ` : ''}
-                            ${account.rateLimit ? `
-                            <div class="detail-row">
-                                <span class="detail-label">Разблокировка через:</span>
-                                <span>${account.rateLimitRemaining} мин</span>
-                            </div>
-                            ` : ''}
-                            ${account.error && !account.rateLimit ? `
-                            <div class="detail-row">
-                                <span class="detail-label">Ошибка:</span>
-                                <span style="color: var(--danger);">${account.error}</span>
-                            </div>
-                            ` : ''}
-                        </div>
-                        
-                        ${account.rateLimit ? `
-                        <div class="rate-limit-section">
-                            <p><strong>🚫 Steam RateLimit</strong></p>
-                            <p style="font-size: 0.9rem; margin-bottom: 10px;">Аккаунт заблокирован Steam на ${account.rateLimitRemaining} минут</p>
-                            <button class="btn" disabled style="width: 100%; background: #6B7280; color: white;">
-                                <i class="fas fa-clock"></i> Ожидание разблокировки...
-                            </button>
-                        </div>
-                        ` : ''}
-                        
-                        ${account.needsSteamGuard && !account.rateLimit ? `
-                        <div class="${account.steamGuardType === 'mobile' ? 'mobile-guard' : 'steam-guard'}-section">
-                            <p><strong>${account.steamGuardType === 'mobile' ? '📱 Mobile Steam Guard' : '🔐 Steam Guard'}</strong></p>
-                            <p style="font-size: 0.9rem; margin-bottom: 10px;">
-                                ${account.steamGuardType === 'mobile' ? 
-                                  'Введите код из мобильного приложения Steam' : 
-                                  'Введите код Steam Guard'}
-                            </p>
-                            <button class="btn ${account.steamGuardType === 'mobile' ? 'btn-success' : 'btn-warning'}" onclick="showSteamGuardModal('${account.id}', '${account.displayName}', '${account.steamGuardType || 'email'}')" style="width: 100%;">
-                                <i class="fas fa-key"></i> Ввести код
-                            </button>
-                        </div>
-                        ` : ''}
-                        
-                        <div style="display: flex; flex-wrap: wrap;">
-                            ${account.farmStatus === 'running' ? `
-                                <button class="btn btn-danger" onclick="stopFarm('${account.id}')">
-                                    <i class="fas fa-stop"></i> Стоп
-                                </button>
-                            ` : `
-                                <button class="btn btn-success" onclick="startFarm('${account.id}')" ${account.rateLimit ? 'disabled' : ''}>
-                                    <i class="fas fa-play"></i> Старт
-                                </button>
-                            `}
-                            <button class="btn btn-primary" onclick="updateAccount('${account.id}')" ${account.rateLimit ? 'disabled' : ''}>
-                                <i class="fas fa-sync-alt"></i> Обновить
-                            </button>
-                            <button class="btn btn-danger" onclick="showDeleteModal('${account.id}', '${account.displayName}')">
-                                <i class="fas fa-trash"></i> Удалить
-                            </button>
+        <div class="header">
+            <h1>Steam Booster</h1>
+            <button class="btn btn-primary" onclick="showAddAccountModal()">+ Добавить аккаунт</button>
+        </div>
+        
+        <div class="accounts-grid" id="accounts-container">
+            ${accountList.map(account => `
+                <div class="account-card">
+                    <div class="account-header">
+                        <div class="account-name">${account.displayName}</div>
+                        <div class="account-status status-${account.botStatus}">
+                            ${account.botStatus === 'steam_guard' ? 'Steam Guard' : 
+                              account.botStatus === 'online' ? 'Онлайн' :
+                              account.botStatus === 'error' ? 'Ошибка' : 'Оффлайн'}
                         </div>
                     </div>
-                `).join('')}
-            </div>
+                    
+                    <div class="account-details">
+                        <div class="detail-row">
+                            <span class="detail-label">Логин:</span>
+                            <span>${account.username}</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Защита:</span>
+                            <span>${account.guardType === 'SGM' ? '📱 Mobile Guard' : account.guardType === 'SGP' ? '📧 Email Guard' : '❌ Нет'}</span>
+                        </div>
+                        ${account.error ? `
+                        <div class="detail-row">
+                            <span class="detail-label">Ошибка:</span>
+                            <span style="color: #ef4444;">${account.error}</span>
+                        </div>
+                        ` : ''}
+                    </div>
+                    
+                    ${account.needsGuardCode ? `
+                    <div class="steam-guard-section">
+                        <p><strong>Требуется Steam Guard код</strong></p>
+                        <button class="btn btn-warning" onclick="showSteamGuardModal('${account.id}', '${account.displayName}')" style="width: 100%;">
+                            Ввести код
+                        </button>
+                    </div>
+                    ` : ''}
+                    
+                    <div>
+                        ${account.farmStatus === 'running' ? `
+                            <button class="btn btn-danger" onclick="stopFarm('${account.id}')">Стоп</button>
+                        ` : `
+                            <button class="btn btn-success" onclick="startFarm('${account.id}')">Старт</button>
+                        `}
+                        <button class="btn btn-primary" onclick="updateAccount('${account.id}')">Обновить</button>
+                        <button class="btn btn-danger" onclick="deleteAccount('${account.id}')">Удалить</button>
+                    </div>
+                </div>
+            `).join('')}
         </div>
 
         <script>
@@ -951,25 +474,17 @@ function generateDashboardHTML() {
                 
                 init() {
                     this.loadData();
-                    setInterval(() => this.loadData(), 5000);
+                    setInterval(() => this.loadData(), 3000);
                 }
                 
                 async loadData() {
                     try {
                         const response = await fetch('/api/status');
                         const data = await response.json();
-                        this.updateUI(data);
+                        this.renderAccounts(data.accounts);
                     } catch (error) {
-                        this.showNotification('Ошибка загрузки данных', 'error');
+                        this.showNotification('Ошибка загрузки', 'error');
                     }
-                }
-                
-                updateUI(data) {
-                    document.getElementById('total-accounts').textContent = data.globalStats.totalAccounts;
-                    document.getElementById('active-farms').textContent = data.globalStats.activeFarms;
-                    document.getElementById('steam-guard-pending').textContent = data.globalStats.steamGuardPending;
-                    document.getElementById('rate-limited').textContent = data.globalStats.rateLimited;
-                    this.renderAccounts(data.accounts);
                 }
                 
                 renderAccounts(accounts) {
@@ -977,14 +492,13 @@ function generateDashboardHTML() {
                     const accountsArray = Object.values(accounts);
                     
                     container.innerHTML = accountsArray.map(account => \`
-                        <div class="account-card \${account.rateLimit ? 'rate-limit' : account.steamGuardType === 'mobile' ? 'mobile-guard' : account.needsSteamGuard ? 'steam-guard' : ''} \${account.error ? 'error' : ''}">
+                        <div class="account-card">
                             <div class="account-header">
                                 <div class="account-name">\${account.displayName}</div>
-                                <div class="account-status status-\${account.rateLimit ? 'rate_limit' : account.steamGuardType === 'mobile' ? 'mobile_guard' : account.botStatus}">
-                                    \${account.rateLimit ? 'Заблокирован' : 
-                                      account.steamGuardType === 'mobile' ? 'Mobile Guard' :
-                                      account.botStatus === 'steam_guard' ? 'Steam Guard' : 
-                                      account.botStatus === 'error' ? 'Ошибка' : account.botStatus}
+                                <div class="account-status status-\${account.botStatus}">
+                                    \${account.botStatus === 'steam_guard' ? 'Steam Guard' : 
+                                      account.botStatus === 'online' ? 'Онлайн' :
+                                      account.botStatus === 'error' ? 'Ошибка' : 'Оффлайн'}
                                 </div>
                             </div>
                             
@@ -994,75 +508,34 @@ function generateDashboardHTML() {
                                     <span>\${account.username}</span>
                                 </div>
                                 <div class="detail-row">
-                                    <span class="detail-label">Игры:</span>
-                                    <span>\${account.games || '730'}</span>
+                                    <span class="detail-label">Защита:</span>
+                                    <span>\${account.guardType === 'SGM' ? '📱 Mobile Guard' : account.guardType === 'SGP' ? '📧 Email Guard' : '❌ Нет'}</span>
                                 </div>
-                                \${account.hasSharedSecret ? \`
-                                <div class="detail-row">
-                                    <span class="detail-label">Тип аутентификации:</span>
-                                    <span style="color: var(--success);">📱 Mobile Guard (Shared Secret)</span>
-                                </div>
-                                \` : ''}
-                                \${account.steamGuardType && account.needsSteamGuard ? \`
-                                <div class="detail-row">
-                                    <span class="detail-label">Требуется:</span>
-                                    <span>\${account.steamGuardType === 'mobile' ? '📱 Mobile Guard код' : '🔐 Steam Guard код'}</span>
-                                </div>
-                                \` : ''}
-                                \${account.rateLimit ? \`
-                                <div class="detail-row">
-                                    <span class="detail-label">Разблокировка через:</span>
-                                    <span>\${account.rateLimitRemaining} мин</span>
-                                </div>
-                                \` : ''}
-                                \${account.error && !account.rateLimit ? \`
+                                \${account.error ? \`
                                 <div class="detail-row">
                                     <span class="detail-label">Ошибка:</span>
-                                    <span style="color: var(--danger);">\${account.error}</span>
+                                    <span style="color: #ef4444;">\${account.error}</span>
                                 </div>
                                 \` : ''}
                             </div>
                             
-                            \${account.rateLimit ? \`
-                            <div class="rate-limit-section">
-                                <p><strong>🚫 Steam RateLimit</strong></p>
-                                <p style="font-size: 0.9rem; margin-bottom: 10px;">Аккаунт заблокирован Steam на \${account.rateLimitRemaining} минут</p>
-                                <button class="btn" disabled style="width: 100%; background: #6B7280; color: white;">
-                                    <i class="fas fa-clock"></i> Ожидание разблокировки...
+                            \${account.needsGuardCode ? \`
+                            <div class="steam-guard-section">
+                                <p><strong>Требуется Steam Guard код</strong></p>
+                                <button class="btn btn-warning" onclick="showSteamGuardModal('\${account.id}', '\${account.displayName}')" style="width: 100%;">
+                                    Ввести код
                                 </button>
                             </div>
                             \` : ''}
                             
-                            \${account.needsSteamGuard && !account.rateLimit ? \`
-                            <div class="\${account.steamGuardType === 'mobile' ? 'mobile-guard' : 'steam-guard'}-section">
-                                <p><strong>\${account.steamGuardType === 'mobile' ? '📱 Mobile Steam Guard' : '🔐 Steam Guard'}</strong></p>
-                                <p style="font-size: 0.9rem; margin-bottom: 10px;">
-                                    \${account.steamGuardType === 'mobile' ? 
-                                      'Введите код из мобильного приложения Steam' : 
-                                      'Введите код Steam Guard'}
-                                </p>
-                                <button class="btn \${account.steamGuardType === 'mobile' ? 'btn-success' : 'btn-warning'}" onclick="showSteamGuardModal('\${account.id}', '\${account.displayName}', '\${account.steamGuardType || 'email'}')" style="width: 100%;">
-                                    <i class="fas fa-key"></i> Ввести код
-                                </button>
-                            </div>
-                            \` : ''}
-                            
-                            <div style="display: flex; flex-wrap: wrap;">
+                            <div>
                                 \${account.farmStatus === 'running' ? \`
-                                    <button class="btn btn-danger" onclick="stopFarm('\${account.id}')">
-                                        <i class="fas fa-stop"></i> Стоп
-                                    </button>
+                                    <button class="btn btn-danger" onclick="stopFarm('\${account.id}')">Стоп</button>
                                 \` : \`
-                                    <button class="btn btn-success" onclick="startFarm('\${account.id}')" \${account.rateLimit ? 'disabled' : ''}>
-                                        <i class="fas fa-play"></i> Старт
-                                    </button>
+                                    <button class="btn btn-success" onclick="startFarm('\${account.id}')">Старт</button>
                                 \`}
-                                <button class="btn btn-primary" onclick="updateAccount('\${account.id}')" \${account.rateLimit ? 'disabled' : ''}>
-                                    <i class="fas fa-sync-alt"></i> Обновить
-                                </button>
-                                <button class="btn btn-danger" onclick="showDeleteModal('\${account.id}', '\${account.displayName}')">
-                                    <i class="fas fa-trash"></i> Удалить
-                                </button>
+                                <button class="btn btn-primary" onclick="updateAccount('\${account.id}')">Обновить</button>
+                                <button class="btn btn-danger" onclick="deleteAccount('\${account.id}')">Удалить</button>
                             </div>
                         </div>
                     \`).join('');
@@ -1072,37 +545,27 @@ function generateDashboardHTML() {
                     const notification = document.getElementById('notification');
                     notification.textContent = message;
                     notification.className = \`notification \${type} show\`;
-                    setTimeout(() => notification.classList.remove('show'), 4000);
+                    setTimeout(() => notification.classList.remove('show'), 3000);
                 }
             }
 
-            function showSteamGuardModal(accountId, accountName, guardType = 'email') {
+            function showSteamGuardModal(accountId, accountName) {
                 document.getElementById('steamGuardContent').innerHTML = \`
-                    <div style="margin-bottom: 15px;">
-                        <p><strong>\${guardType === 'mobile' ? '📱 Mobile Steam Guard' : '🔐 Steam Guard'}</strong></p>
-                        <p style="font-size: 0.9rem; color: var(--text-secondary);">
-                            \${guardType === 'mobile' ? 
-                              'Введите 5-значный код из мобильного приложения Steam' : 
-                              'Введите код Steam Guard'}
-                        </p>
-                    </div>
                     <div class="form-group">
+                        <label>Код для \${accountName}:</label>
                         <input type="text" id="steamGuardCode" placeholder="Введите 5-значный код" maxlength="5">
                     </div>
-                    <button class="btn \${guardType === 'mobile' ? 'btn-success' : 'btn-warning'}" onclick="submitSteamGuardCode('\${accountId}', '\${guardType}')" style="width: 100%;">
-                        <i class="fas fa-shield-alt"></i> Подтвердить код
+                    <button class="btn btn-warning" onclick="submitSteamGuardCode('\${accountId}')" style="width: 100%;">
+                        Подтвердить
                     </button>
-                    <p style="margin-top: 15px; font-size: 0.9rem; color: var(--text-secondary);">
-                        <i class="fas fa-info-circle"></i> После ввода кода система автоматически перезапустит подключение
-                    </p>
                 \`;
                 document.getElementById('steamGuardModal').style.display = 'flex';
             }
 
-            async function submitSteamGuardCode(accountId, guardType) {
+            async function submitSteamGuardCode(accountId) {
                 const code = document.getElementById('steamGuardCode').value;
                 if (!code) {
-                    dashboard.showNotification('Введите код Steam Guard', 'error');
+                    dashboard.showNotification('Введите код', 'error');
                     return;
                 }
 
@@ -1110,22 +573,19 @@ function generateDashboardHTML() {
                     const response = await fetch(\`/api/steam-guard/\${accountId}\`, {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ 
-                            code: code,
-                            guardType: guardType 
-                        })
+                        body: JSON.stringify({ code })
                     });
                     
                     const result = await response.json();
                     
                     if (result.success) {
-                        dashboard.showNotification('Код отправлен! Перезапускаем подключение...', 'success');
+                        dashboard.showNotification('Код отправлен!', 'success');
                         document.getElementById('steamGuardModal').style.display = 'none';
                     } else {
                         dashboard.showNotification(result.error, 'error');
                     }
                 } catch (error) {
-                    dashboard.showNotification('Ошибка отправки кода', 'error');
+                    dashboard.showNotification('Ошибка отправки', 'error');
                 }
             }
 
@@ -1135,7 +595,7 @@ function generateDashboardHTML() {
                     const result = await response.json();
                     dashboard.showNotification(result.success ? 'Фарм запущен' : result.error, result.success ? 'success' : 'error');
                 } catch (error) {
-                    dashboard.showNotification('Ошибка запуска фарма', 'error');
+                    dashboard.showNotification('Ошибка запуска', 'error');
                 }
             }
 
@@ -1145,34 +605,25 @@ function generateDashboardHTML() {
                     const result = await response.json();
                     dashboard.showNotification(result.success ? 'Фарм остановлен' : result.error, result.success ? 'success' : 'error');
                 } catch (error) {
-                    dashboard.showNotification('Ошибка остановки фарма', 'error');
+                    dashboard.showNotification('Ошибка остановки', 'error');
                 }
             }
 
             async function updateAccount(accountId) {
-                try {
-                    const response = await fetch(\`/api/update/\${accountId}\`, {method: 'POST'});
-                    dashboard.showNotification('Данные обновлены', 'success');
-                } catch (error) {
-                    dashboard.showNotification('Ошибка обновления', 'error');
-                }
+                dashboard.showNotification('Обновлено', 'success');
+                dashboard.loadData();
             }
 
-            function showDeleteModal(accountId, accountName) {
-                const adminUsername = prompt('Логин администратора:');
-                const adminPassword = prompt('Пароль администратора:');
-                
-                if (adminUsername && adminPassword) {
-                    fetch(\`/api/accounts/delete/\${accountId}\`, {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({adminUsername, adminPassword})
-                    })
-                    .then(r => r.json())
-                    .then(result => {
-                        alert(result.success ? 'Аккаунт удален' : result.error);
-                        if (result.success) dashboard.loadData();
-                    });
+            async function deleteAccount(accountId) {
+                if (confirm('Удалить аккаунт?')) {
+                    try {
+                        const response = await fetch(\`/api/accounts/delete/\${accountId}\`, {method: 'POST'});
+                        const result = await response.json();
+                        dashboard.showNotification(result.success ? 'Аккаунт удален' : result.error, result.success ? 'success' : 'error');
+                        dashboard.loadData();
+                    } catch (error) {
+                        dashboard.showNotification('Ошибка удаления', 'error');
+                    }
                 }
             }
 
@@ -1181,14 +632,20 @@ function generateDashboardHTML() {
                 const password = prompt('Пароль Steam:');
                 const displayName = prompt('Название на сайте:');
                 const steamId = prompt('Steam ID:');
-                const games = prompt('ID игр через пробел (по умолчанию 730):', '730');
-                const sharedSecret = prompt('Shared Secret (для Mobile Guard, опционально):');
+                const guardType = prompt('Тип защиты (SGM - Mobile, SGP - Email, пусто - нет защиты):', '');
 
                 if (username && password && displayName && steamId) {
                     fetch('/api/accounts/add', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({username, password, displayName, steamId, games, sharedSecret})
+                        body: JSON.stringify({
+                            username, 
+                            password, 
+                            displayName, 
+                            steamId, 
+                            games: '730',
+                            guardType: guardType || 'none'
+                        })
                     })
                     .then(r => r.json())
                     .then(result => {
@@ -1200,6 +657,7 @@ function generateDashboardHTML() {
 
             const dashboard = new Dashboard();
 
+            // Закрытие модального окна
             document.getElementById('steamGuardModal').addEventListener('click', (e) => {
                 if (e.target.id === 'steamGuardModal') {
                     e.target.style.display = 'none';
@@ -1212,8 +670,10 @@ function generateDashboardHTML() {
 }
 
 // 🚀 Запуск сервера
-console.log('🚀 Запуск Steam Hour Booster...');
-console.log(`📊 Загружено аккаунтов: ${Object.keys(accounts).length}`);
+console.log('🚀 Запуск Steam Booster...');
+console.log('📊 Предустановленные аккаунты:');
+console.log('1. точка (tochka_bi_laik) - без защиты');
+console.log('2. кинелька (k1nelsteam) - Mobile Steam Guard');
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`📡 Сервер запущен на порту ${PORT}`);
