@@ -651,10 +651,6 @@ function generateDashboardHTML() {
         <div class="container">
             <div class="header">
                 <h1><i class="fas fa-robot"></i> Steam Hour Booster</h1>
-                <p style="color: var(--text-secondary); margin-bottom: 20px;">
-                    🔐 Логин администратора: <strong>${ADMIN_CONFIG.username}</strong> | 
-                    Пароль: <strong>${ADMIN_CONFIG.password}</strong>
-                </p>
                 <button class="btn btn-primary" onclick="showAddAccountModal()">
                     <i class="fas fa-plus"></i> Добавить аккаунт
                 </button>
