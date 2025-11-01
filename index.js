@@ -34,7 +34,7 @@ const DB_PATH = process.env.DB_PATH || './data/app.db';
     cookie: { secure: false }
   }));
 
-  app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public')));
 
   // routes
   app.use('/api/auth', require('./src/routes/auth')(db));
