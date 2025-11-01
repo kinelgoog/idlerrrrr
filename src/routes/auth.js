@@ -1,32 +1,38 @@
-// src/routes/auth.js
+const express = require('express');
 const bcrypt = require('bcryptjs');
-const uuid = require('uuid');
 
 module.exports = (db) => {
-  const router = require('express').Router();
+  const router = express.Router();
 
-  // Simple admin login using ADMIN_PASS (env) - hashed in memory
-  const ADMIN_USER = process.env.ADMIN_USER || 'admin';
-  const ADMIN_PASS = process.env.ADMIN_PASS || null; // обязательно задать в env
-
-  if (!ADMIN_PASS) {
-    console.warn('ADMIN_PASS not set — web login disabled');
-  }
+  router.post('/register', async (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) return res.status(400).json({ error:'missing' });
+    const existing = await db.findUserByUsername(username);
+    if (existing) return res.status(400).json({ error:'user_exists' });
+    const user = await db.createUser(username, password);
+    req.session.userId = user.id;
+    res.json({ success:true, user:{ id:user.id, username:user.username } });
+  });
 
   router.post('/login', async (req, res) => {
-    if (!ADMIN_PASS) return res.status(403).json({ error: 'Admin login disabled' });
-    const { user, pass } = req.body;
-    if (user !== ADMIN_USER) return res.status(403).json({ error: 'Invalid' });
-    const ok = pass === ADMIN_PASS;
-    if (!ok) return res.status(403).json({ error: 'Invalid' });
-    // set session
-    req.session.loggedIn = true;
-    req.session.user = ADMIN_USER;
-    res.json({ success: true });
+    const { username, password } = req.body;
+    if (!username || !password) return res.status(400).json({ error:'missing' });
+    const user = await db.findUserByUsername(username);
+    if (!user) return res.status(400).json({ error:'invalid' });
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) return res.status(400).json({ error:'invalid' });
+    req.session.userId = user.id;
+    res.json({ success:true, user:{ id:user.id, username:user.username } });
   });
 
   router.post('/logout', (req, res) => {
-    req.session.destroy(() => res.json({ success: true }));
+    req.session.destroy(()=>res.json({ success:true }));
+  });
+
+  router.get('/me', async (req, res) => {
+    if (!req.session.userId) return res.status(401).json({ error:'unauth' });
+    const user = await db.getUserById(req.session.userId);
+    res.json({ user });
   });
 
   return router;
