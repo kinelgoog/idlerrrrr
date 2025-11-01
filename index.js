@@ -230,7 +230,6 @@ app.get('/', (req, res) => {
                         </div>
                     </div>
                     <div><strong>Логин:</strong> ${acc.username}</div>
-                    <div><strong>Пароль:</strong> ${acc.password}</div>
                     <div><strong>Игры:</strong> ${acc.games}</div>
                     ${acc.error ? `<div class="error-text"><strong>Ошибка:</strong> ${acc.error}</div>` : ''}
                     
