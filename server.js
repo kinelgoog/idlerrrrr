@@ -1,5 +1,6 @@
 /**
- * ULTIMATE STEAM IDLER PRO (Pre-Auth Edition)
+ * ULTIMATE STEAM IDLER (Token Persistence Edition)
+ * Вводишь код 1 раз -> Бот работает вечно.
  */
 
 require('dotenv').config();
@@ -13,6 +14,7 @@ const bcrypt = require('bcryptjs');
 const { Sequelize, DataTypes } = require('sequelize');
 const SequelizeStore = require('connect-session-sequelize')(session.Store);
 const path = require('path');
+const fs = require('fs');
 
 // --- CONFIG ---
 const app = express();
@@ -35,6 +37,7 @@ const User = sequelize.define('User', {
     steamLogin: { type: DataTypes.STRING, defaultValue: '' },
     steamPassword: { type: DataTypes.STRING, defaultValue: '' },
     sharedSecret: { type: DataTypes.STRING, defaultValue: '' },
+    refreshToken: { type: DataTypes.STRING, defaultValue: '' }, // <--- ВОТ ГЛАВНАЯ ФИШКА
     proxy: { type: DataTypes.STRING, defaultValue: '' },
     config: { 
         type: DataTypes.JSON, 
@@ -44,7 +47,7 @@ const User = sequelize.define('User', {
     lastKnownIP: { type: DataTypes.STRING, defaultValue: 'Unknown' }
 });
 
-sequelize.sync();
+sequelize.sync(); // Создаст базу, если нет
 
 const bots = new Map();
 
@@ -55,11 +58,11 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 app.use(session({
-    secret: 'sqlite_secret_key_999',
+    secret: 'super_secret_key_x99',
     store: new SequelizeStore({ db: sequelize }),
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 1000 * 60 * 60 * 24 * 14 }
+    cookie: { maxAge: 1000 * 60 * 60 * 24 * 30 } // 30 дней
 }));
 
 // --- HELPERS ---
@@ -76,18 +79,19 @@ const log = (userId, msg, type = 'info') => {
     io.to(userId).emit('new_log', { time, msg, type });
 };
 
-// --- BOT LOGIC ---
-// ТУТ ИЗМЕНЕНИЕ: Добавил аргумент preAuthCode
-async function startBot(user, preAuthCode = null) {
+// --- ГЛАВНАЯ ЛОГИКА БОТА ---
+async function startBot(user, manualCode = null) {
     const userId = user.id.toString();
     const bot = getBotData(userId);
 
     if (bot.client || bot.reconnectTimer) return;
 
-    const options = {};
+    const options = {
+        autoRelogin: true // Пусть либа сама пытается реконнектить при обрывах
+    };
     if (user.proxy && user.proxy.length > 5) {
         options.httpProxy = user.proxy;
-        log(userId, `🌐 Прокси активен`, 'warning');
+        log(userId, `🌐 Прокси включен`, 'warning');
     }
 
     const client = new SteamUser(options);
@@ -95,26 +99,43 @@ async function startBot(user, preAuthCode = null) {
     bot.status = 'Starting...';
     io.to(userId).emit('status_update', bot.status);
 
+    // --- ЛОГИКА ВХОДА ---
     const logOnDetails = {
         accountName: user.steamLogin,
-        password: user.steamPassword,
     };
 
-    // 1. Если есть Shared Secret в базе - используем его (приоритет)
-    if (user.sharedSecret && user.sharedSecret.length > 5) {
-        try {
-            logOnDetails.twoFactorCode = SteamTotp.generateAuthCode(user.sharedSecret);
-            log(userId, `🔐 Auto-2FA код сгенерирован`, 'success');
-        } catch (e) { log(userId, `❌ Bad Secret`, 'error'); }
+    // 1. Если у нас уже есть ТОКЕН (мы входили раньше) - входим по нему
+    if (user.refreshToken && user.refreshToken.length > 10) {
+        logOnDetails.refreshToken = user.refreshToken;
+        log(userId, `🔑 Вход по сохраненному токену... (Код не нужен)`, 'info');
     } 
-    // 2. Если секрета нет, но юзер ввел код вручную перед стартом
-    else if (preAuthCode && preAuthCode.length > 2) {
-        logOnDetails.twoFactorCode = preAuthCode; // Для Mobile Guard
-        logOnDetails.authCode = preAuthCode;      // Для Email Guard (на всякий случай)
-        log(userId, `🔐 Использую введенный вручную код: ${preAuthCode}`, 'info');
+    // 2. Иначе входим по паролю
+    else {
+        logOnDetails.password = user.steamPassword;
+        
+        // Если есть секрет - генерируем код
+        if (user.sharedSecret && user.sharedSecret.length > 5) {
+            try {
+                logOnDetails.twoFactorCode = SteamTotp.generateAuthCode(user.sharedSecret);
+                log(userId, `🔐 Auto-2FA сгенерирован`, 'success');
+            } catch (e) {}
+        }
+        // Если ввели код вручную перед стартом
+        else if (manualCode) {
+            logOnDetails.twoFactorCode = manualCode;
+            log(userId, `🔐 Использую введенный код`, 'info');
+        }
     }
 
     client.logOn(logOnDetails);
+
+    // --- СОБЫТИЯ ---
+
+    // САМОЕ ВАЖНОЕ: Steam выдал нам новый токен. СОХРАНЯЕМ ЕГО!
+    client.on('refreshToken', async (token) => {
+        log(userId, `💾 Токен обновлен и сохранен в базу!`, 'success');
+        await user.update({ refreshToken: token });
+    });
 
     client.on('loggedOn', async (details) => {
         bot.status = 'Running';
@@ -127,44 +148,55 @@ async function startBot(user, preAuthCode = null) {
         const games = cfg.customGame ? [cfg.customGame, ...cfg.games] : cfg.games;
         client.gamesPlayed(games);
         
-        log(userId, `🚀 Вход выполнен!`, 'success');
+        log(userId, `🚀 Успешный вход!`, 'success');
         await user.update({ isRunning: true });
         io.to(userId).emit('status_update', bot.status);
     });
 
-    client.on('steamGuard', (domain, callback) => {
+    client.on('steamGuard', (domain, callback, lastCodeWrong) => {
+        if(lastCodeWrong) log(userId, `❌ Код не подошел!`, 'error');
+        
         bot.status = 'Need 2FA';
         bot.guardCallback = callback;
         io.to(userId).emit('status_update', bot.status);
         io.to(userId).emit('request_guard', { domain });
-        log(userId, `🛡 Код не подошел или не введен. Введите сейчас!`, 'warning');
+        log(userId, `🛡 НУЖЕН КОД! Введите в панели.`, 'warning');
     });
 
     client.on('error', (err) => {
-        log(userId, `❌ Error: ${err.message}`, 'error');
+        log(userId, `❌ Ошибка: ${err.message}`, 'error');
+        
+        // Если токен протух - удаляем его, чтобы в следующий раз спросил пароль
+        if (err.message.includes('InvalidPassword') || err.message.includes('LogonSessionReplaced')) {
+             user.update({ refreshToken: '' });
+             log(userId, `⚠ Токен сброшен. В следующий раз нужен пароль/код.`, 'warning');
+        }
+
         handleDisconnect(userId, user, err);
     });
 
     client.on('disconnected', (res, msg) => {
-        log(userId, `🔌 Disconnected: ${msg}`, 'warning');
         handleDisconnect(userId, user, { eresult: res, message: msg });
     });
 }
 
 function handleDisconnect(userId, user, error) {
     const bot = getBotData(userId);
-    if(bot.client) { bot.client.removeAllListeners(); bot.client = null; }
+    if(bot.client) { 
+        bot.client.removeAllListeners(); 
+        bot.client = null; 
+    }
     
     const isKick = error.eresult === 6 || (error.message && error.message.includes('LoggedInElsewhere'));
-    let delay = 30000;
+    let delay = 30000; // 30 сек
 
     if (isKick) {
-        delay = 600000; // 10 min
+        delay = 600000; // 10 минут
         bot.status = 'Sleeping (Owner Playing)';
         log(userId, `🎮 Владелец играет. Жду 10 мин...`, 'warning');
     } else {
         bot.status = 'Reconnecting...';
-        log(userId, `🔄 Реконнект 30 сек...`, 'info');
+        log(userId, `🔄 Реконнект через 30 сек...`, 'info');
     }
     
     io.to(userId).emit('status_update', bot.status);
@@ -174,7 +206,7 @@ function handleDisconnect(userId, user, error) {
         bot.reconnectTimer = null;
         User.findByPk(userId).then(u => {
             if(u && u.isRunning) startBot(u);
-            else { bot.status = 'Stopped'; io.to(userId).emit('status_update', 'Stopped'); }
+            else stopBot(userId);
         });
     }, delay);
 }
@@ -183,12 +215,14 @@ function stopBot(userId) {
     const bot = getBotData(userId);
     if(bot.client) { bot.client.logOff(); bot.client = null; }
     if(bot.reconnectTimer) clearTimeout(bot.reconnectTimer);
+    
     bot.status = 'Stopped';
     User.findByPk(userId).then(u => u.update({ isRunning: false }));
     io.to(userId).emit('status_update', 'Stopped');
-    log(userId, '🛑 Stopped', 'error');
+    log(userId, '🛑 Бот остановлен', 'error');
 }
 
+// Сторожевой пес (Watchdog)
 setInterval(async () => {
     const users = await User.findAll({ where: { isRunning: true } });
     for(const u of users) {
@@ -208,11 +242,11 @@ app.get('/', auth, async (req, res) => {
 });
 
 app.post('/api/action', auth, async (req, res) => {
-    const { action, code, guardCode } = req.body; // guardCode - код при старте
+    const { action, code, guardCode } = req.body;
     const user = await User.findByPk(req.session.userId);
     const bot = getBotData(user.id.toString());
 
-    if (action === 'start') startBot(user, guardCode); // Передаем код в старт
+    if (action === 'start') startBot(user, guardCode);
     if (action === 'stop') stopBot(user.id.toString());
     if (action === 'guard' && bot.guardCallback) {
         bot.guardCallback(code);
@@ -226,10 +260,16 @@ app.post('/api/action', auth, async (req, res) => {
 app.post('/api/update', auth, async (req, res) => {
     const { steamLogin, steamPassword, sharedSecret, proxy, games } = req.body;
     const gameIds = games.split(',').map(g => parseInt(g)).filter(n => !isNaN(n));
-    await User.update({
+    
+    // Если меняем пароль - сбрасываем токен, чтобы перелогиниться
+    const user = await User.findByPk(req.session.userId);
+    let resetToken = user.steamPassword !== steamPassword; 
+    
+    await user.update({
         steamLogin, steamPassword, sharedSecret, proxy,
+        refreshToken: resetToken ? '' : user.refreshToken,
         config: { games: gameIds, customGame: '', personaState: 1, autoReply: '' }
-    }, { where: { id: req.session.userId } });
+    });
     res.json({ ok: true });
 });
 
