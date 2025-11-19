@@ -1,4 +1,5 @@
-<%- include('layout', { body: `
+<%- include('header') %>
+
 <nav class="navbar navbar-expand navbar-dark bg-transparent py-3">
     <div class="container">
         <span class="navbar-brand fw-bold"><i class="fas fa-gamepad text-primary"></i> IDLER <span class="text-muted fs-6">PRO</span></span>
@@ -137,7 +138,7 @@
             const h = Math.floor(diff / 3600).toString().padStart(2, '0');
             const m = Math.floor((diff % 3600) / 60).toString().padStart(2, '0');
             const s = (diff % 60).toString().padStart(2, '0');
-            document.getElementById('uptime').innerText = \`\${h}:\${m}:\${s}\`;
+            document.getElementById('uptime').innerText = `${h}:${m}:${s}`;
         } else {
             document.getElementById('uptime').innerText = "00:00:00";
         }
@@ -146,8 +147,8 @@
     // Socket Events
     socket.on('new_log', (log) => {
         const div = document.createElement('div');
-        div.className = \`log-entry log-\${log.type}\`;
-        div.innerHTML = \`<span class="text-muted">[\${log.time}]</span> \${log.msg}\`;
+        div.className = `log-entry log-${log.type}`;
+        div.innerHTML = `<span class="text-muted">[${log.time}]</span> ${log.msg}`;
         logWin.appendChild(div);
         logWin.scrollTop = logWin.scrollHeight;
     });
@@ -228,4 +229,4 @@
     
     function clearLog() { logWin.innerHTML = ''; }
 </script>
-` }) %>
+<%- include('footer') %>
