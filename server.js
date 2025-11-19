@@ -1,6 +1,5 @@
 /**
- * ULTIMATE STEAM IDLER PRO (SQLite Edition)
- * No external DB required. Data is stored in 'database.sqlite'.
+ * ULTIMATE STEAM IDLER PRO (SQLite Edition - FINAL FIXED)
  */
 
 require('dotenv').config();
@@ -15,7 +14,6 @@ const bcrypt = require('bcryptjs');
 const { Sequelize, DataTypes } = require('sequelize');
 const SequelizeStore = require('connect-session-sequelize')(session.Store);
 const path = require('path');
-const fs = require('fs');
 
 // --- CONFIG ---
 const app = express();
@@ -245,6 +243,8 @@ app.get('/admin', auth, async (req, res) => {
 });
 
 app.get('/login', (req, res) => res.render('login', { error: null }));
+
+// ВОТ ЗДЕСЬ БЫЛА ОШИБКА, ТЕПЕРЬ ИСПРАВЛЕНО:
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
     const user = await User.findOne({ where: { username } });
@@ -254,6 +254,7 @@ app.post('/login', async (req, res) => {
 });
 
 app.get('/register', (req, res) => res.render('register', { error: null }));
+
 app.post('/register', async (req, res) => {
     const count = await User.count();
     if(count >= 10) return res.render('register', { error: 'Full' });
@@ -313,5 +314,3 @@ io.on('connection', (socket) => {
 });
 
 server.listen(PORT, () => console.log(`🚀 SQLite Idler running on ${PORT}`));
-    const user = await User.findOne({ where: { username } });
-    if (!user || !awa
