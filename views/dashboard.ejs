@@ -17,14 +17,13 @@
 
 <nav class="navbar navbar-dark bg-dark mb-4">
     <div class="container">
-        <span class="navbar-brand">🤖 IDLER PRO</span>
+        <span class="navbar-brand">🤖 IDLER FINAL</span>
         <a href="/logout" class="btn btn-outline-light btn-sm">Выход</a>
     </div>
 </nav>
 
 <div class="container">
     <div class="row">
-        <!-- Настройки -->
         <div class="col-md-4">
             <div class="glass-card mb-3">
                 <h5>Настройки</h5>
@@ -38,18 +37,18 @@
                         <input type="password" id="pass" class="form-control bg-dark text-white" value="<%= user.steamPassword %>">
                     </div>
                     <div class="mb-2">
-                        <label>Shared Secret (для авто-входа)</label>
-                        <input type="text" id="secret" class="form-control bg-dark text-white" value="<%= user.sharedSecret %>" placeholder="Необязательно">
+                        <label>Shared Secret (опция)</label>
+                        <input type="text" id="secret" class="form-control bg-dark text-white" value="<%= user.sharedSecret %>">
                     </div>
                     <div class="mb-2">
-                        <label>Games (AppIDs)</label>
+                        <label>Games</label>
                         <input type="text" id="games" class="form-control bg-dark text-white" value="<%= user.config.games.join(', ') %>">
                     </div>
                     <div class="mb-2">
                         <label>Proxy</label>
                         <input type="text" id="proxy" class="form-control bg-dark text-white" value="<%= user.proxy %>">
                     </div>
-                    <button type="submit" class="btn btn-primary w-100 mt-2">Сохранить Настройки</button>
+                    <button type="submit" class="btn btn-primary w-100 mt-2">Сохранить</button>
                 </form>
             </div>
             
@@ -58,9 +57,10 @@
                 <h3 id="statusText" class="my-3"><%= bot.status %></h3>
                 <div id="statusInd" class="status-dot mb-3 <%= bot.status === 'Running' ? 'running' : '' %>"></div>
                 
-                <!-- НОВОЕ ПОЛЕ ДЛЯ КОДА -->
+                <!-- Поле для ПЕРВОГО входа -->
                 <div class="mb-3">
-                    <input type="text" id="preStartCode" class="form-control bg-dark text-white text-center" placeholder="Код Steam Guard (ввести перед стартом)">
+                    <input type="text" id="preStartCode" class="form-control bg-dark text-white text-center" placeholder="Код Steam Guard (если просит)">
+                    <small class="text-muted">Введите код 1 раз, потом бот запомнит вас</small>
                 </div>
 
                 <div class="d-grid gap-2">
@@ -70,7 +70,6 @@
             </div>
         </div>
 
-        <!-- Логи -->
         <div class="col-md-8">
             <div class="glass-card h-100">
                 <h5>Логи</h5>
@@ -84,13 +83,12 @@
     </div>
 </div>
 
-<!-- Модалка (на всякий случай, если код не ввел) -->
 <div class="modal fade" id="gModal" tabindex="-1">
     <div class="modal-dialog"><div class="modal-content bg-dark">
         <div class="modal-body text-center">
-            <h4>Введите код Steam Guard</h4>
-            <p class="small text-muted">Вы не ввели код перед стартом. Введите сейчас:</p>
-            <input id="gCode" class="form-control text-center my-3" placeholder="XXXXX">
+            <h4>Steam Guard</h4>
+            <p>Введите код сейчас:</p>
+            <input id="gCode" class="form-control text-center my-3">
             <button onclick="sendG()" class="btn btn-primary w-100">Отправить</button>
         </div>
     </div></div>
@@ -122,18 +120,11 @@
     socket.on('request_guard', () => gModal.show());
 
     async function act(action) {
-        // Берем код из нового поля
         const guardCode = document.getElementById('preStartCode').value;
-        
         await fetch('/api/action', {
             method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({
-                action,
-                guardCode: guardCode // Отправляем код сразу
-            })
+            body: JSON.stringify({ action, guardCode })
         });
-        
-        // Очищаем поле, чтобы не мешалось
         if(action === 'start') document.getElementById('preStartCode').value = '';
     }
 
@@ -152,14 +143,14 @@
             steamLogin: document.getElementById('login').value,
             steamPassword: document.getElementById('pass').value,
             sharedSecret: document.getElementById('secret').value,
-            proxy: document.getElementById('proxy').value, 
+            proxy: document.getElementById('proxy').value,
             games: document.getElementById('games').value
         };
         await fetch('/api/update', {
             method: 'POST', headers: {'Content-Type':'application/json'},
             body: JSON.stringify(data)
         });
-        alert('Настройки сохранены!');
+        alert('Сохранено!');
     };
 </script>
 </body>
