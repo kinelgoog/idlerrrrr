@@ -24,12 +24,11 @@ const io = socketIo(server);
 const PORT = process.env.PORT || 3000;
 
 // --- DATABASE SETUP (SQLite) ---
-// Создаем файл базы данных прямо в папке проекта
 const dbPath = path.join(__dirname, 'database.sqlite');
 const sequelize = new Sequelize({
     dialect: 'sqlite',
     storage: dbPath,
-    logging: false // Отключаем мусор в консоли
+    logging: false
 });
 
 // --- MODELS ---
@@ -41,7 +40,6 @@ const User = sequelize.define('User', {
     steamPassword: { type: DataTypes.STRING, defaultValue: '' },
     sharedSecret: { type: DataTypes.STRING, defaultValue: '' },
     proxy: { type: DataTypes.STRING, defaultValue: '' },
-    // В SQLite нет массивов, храним JSON как строку
     config: { 
         type: DataTypes.JSON, 
         defaultValue: {
@@ -55,7 +53,7 @@ const User = sequelize.define('User', {
     lastKnownIP: { type: DataTypes.STRING, defaultValue: 'Unknown' }
 });
 
-// Синхронизация БД (создаст файл если его нет)
+// Sync DB
 sequelize.sync()
     .then(() => console.log('✅ SQLite Database Ready'))
     .catch(err => console.error('❌ DB Error:', err));
@@ -74,7 +72,7 @@ app.use(session({
     store: new SequelizeStore({ db: sequelize }),
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 1000 * 60 * 60 * 24 * 14 } // 14 дней
+    cookie: { maxAge: 1000 * 60 * 60 * 24 * 14 }
 }));
 
 // --- HELPER FUNCTIONS ---
@@ -102,7 +100,7 @@ const log = (userId, msg, type = 'info') => {
 
 // --- CORE BOT LOGIC ---
 async function startBot(user) {
-    const userId = user.id.toString(); // Sequelize использует .id (number), переводим в string для Map
+    const userId = user.id.toString();
     const bot = getBotData(userId);
 
     if (bot.client) return;
@@ -141,8 +139,8 @@ async function startBot(user) {
         bot.startTime = Date.now();
         bot.reconnectAttempts = 0;
         
-        // Достаем конфиг из JSON
-        const cfg = typeof user.config === 'string' ? JSON.parse(user.config) : user.config;
+        let cfg = user.config;
+        if(typeof cfg === 'string') cfg = JSON.parse(cfg);
         
         client.setPersona(cfg.personaState || 1);
         const gamesToPlay = cfg.customGame ? [cfg.customGame, ...cfg.games] : cfg.games;
@@ -151,7 +149,6 @@ async function startBot(user) {
         bot.publicIP = details.publicIP ? parseIP(details.publicIP) : 'Hidden';
         
         log(userId, `🚀 Вход выполнен! IP: ${bot.publicIP}`, 'success');
-        log(userId, `🎮 Игр запущено: ${gamesToPlay.length}`, 'info');
         
         await user.update({ isRunning: true, lastKnownIP: bot.publicIP });
         io.to(userId).emit('status_update', bot.status);
@@ -186,7 +183,6 @@ async function startBot(user) {
         }
     });
     
-    // Fetch Games Handler
     client.on('ownershipCached', () => {
         bot.ownedGames = client.getOwnedApps();
     });
@@ -217,7 +213,6 @@ setInterval(async () => {
     for (const user of users) {
         const bot = bots.get(user.id.toString());
         if (!bot || !bot.client) {
-            console.log(`🐶 Watchdog: Reviving bot for ${user.username}`);
             startBot(user);
         }
     }
@@ -229,7 +224,6 @@ const auth = (req, res, next) => req.session.userId ? next() : res.redirect('/lo
 app.get('/', auth, async (req, res) => {
     const user = await User.findByPk(req.session.userId);
     const bot = getBotData(user.id.toString());
-    // Исправление для EJS: если config строка, парсим
     if(typeof user.config === 'string') user.config = JSON.parse(user.config);
     res.render('dashboard', { user, bot });
 });
@@ -253,5 +247,71 @@ app.get('/admin', auth, async (req, res) => {
 app.get('/login', (req, res) => res.render('login', { error: null }));
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
+    const user = await User.findOne({ where: { username } });
+    if (!user || !await bcrypt.compare(password, user.password)) return res.render('login', { error: 'Error' });
+    req.session.userId = user.id;
+    res.redirect('/');
+});
+
+app.get('/register', (req, res) => res.render('register', { error: null }));
+app.post('/register', async (req, res) => {
+    const count = await User.count();
+    if(count >= 10) return res.render('register', { error: 'Full' });
+    
+    try {
+        const hashedPassword = await bcrypt.hash(req.body.password, 10);
+        const user = await User.create({
+            username: req.body.username,
+            password: hashedPassword,
+            isAdmin: count === 0
+        });
+        req.session.userId = user.id;
+        res.redirect('/');
+    } catch (e) { res.render('register', { error: 'Taken' }); }
+});
+
+app.get('/logout', (req, res) => req.session.destroy(() => res.redirect('/login')));
+
+app.post('/api/update', auth, async (req, res) => {
+    const { steamLogin, steamPassword, sharedSecret, proxy, games, customGame, autoReply } = req.body;
+    const gameIds = games.split(',').map(g => parseInt(g.trim())).filter(n => !isNaN(n));
+    
+    await User.update({
+        steamLogin, steamPassword, sharedSecret, proxy,
+        config: { games: gameIds, customGame, autoReply, personaState: 1 }
+    }, { where: { id: req.session.userId } });
+    
+    res.json({ ok: true });
+});
+
+app.post('/api/action', auth, async (req, res) => {
+    const { action, code } = req.body;
+    const user = await User.findByPk(req.session.userId);
+    const bot = getBotData(user.id.toString());
+
+    if (action === 'start') startBot(user);
+    if (action === 'stop') stopBot(user.id.toString());
+    if (action === 'guard' && bot.guardCallback) {
+        bot.guardCallback(code);
+        bot.guardCallback = null;
+        bot.status = 'Checking...';
+        io.to(user.id.toString()).emit('status_update', bot.status);
+    }
+    res.json({ ok: true });
+});
+
+app.get('/api/my-games', auth, (req, res) => {
+    const bot = getBotData(req.session.userId.toString());
+    if(bot.client && bot.ownedGames) {
+         return res.json({ games: bot.ownedGames });
+    }
+    res.json({ games: [] });
+});
+
+io.on('connection', (socket) => {
+    socket.on('join', (uid) => socket.join(uid.toString()));
+});
+
+server.listen(PORT, () => console.log(`🚀 SQLite Idler running on ${PORT}`));
     const user = await User.findOne({ where: { username } });
     if (!user || !awa
